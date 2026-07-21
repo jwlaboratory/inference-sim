@@ -14,7 +14,8 @@ from collections import OrderedDict
 class GPU:
     def __init__(self, name, spec, cfg):
         self.name, self.spec, self.cfg = name, spec, cfg
-        self.weight_bytes = cfg.PARAMS * cfg.DTYPE_BYTES
+        self.weight_bytes = cfg.PARAMS * cfg.DTYPE_BYTES           # HBM footprint
+        self.active_bytes = cfg.ACTIVE_PARAMS * cfg.DTYPE_BYTES   # read per token
         self.kv_per_tok = 2 * cfg.LAYERS * cfg.KV_HEADS * cfg.HEAD_DIM * cfg.DTYPE_BYTES
         self.block_bytes = self.kv_per_tok * cfg.BLOCK_TOKENS
         self.free_at = 0.0   # when the current queue drains
@@ -25,12 +26,12 @@ class GPU:
 
     # --- timing equations ---
     def prefill_time(self, tokens):
-        """Compute-bound: 2 FLOPs per parameter per token."""
-        return 2 * self.cfg.PARAMS * tokens / (self.spec.flops * self.cfg.MFU)
+        """Compute-bound: 2 FLOPs per active parameter per token."""
+        return 2 * self.cfg.ACTIVE_PARAMS * tokens / (self.spec.flops * self.cfg.MFU)
 
     def decode_time(self, out_tokens, context_tokens):
-        """Memory-bound: each token reads all weights plus the KV cache."""
-        per_token = (self.weight_bytes + context_tokens * self.kv_per_tok) \
+        """Memory-bound: each token reads the active weights plus the KV cache."""
+        per_token = (self.active_bytes + context_tokens * self.kv_per_tok) \
             / (self.spec.hbm_bw * self.cfg.MBU)
         return out_tokens * per_token
 

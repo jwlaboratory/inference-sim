@@ -1,13 +1,15 @@
-import { SECTIONS, SPEC_FIELDS, MODEL_PRESETS, PRESET_KEYS } from '../config.js'
+import { SECTIONS, SPEC_FIELDS, MODEL_PRESETS, PRESET_KEYS, PRESET_MATCH_KEYS,
+         QUANT_OPTIONS } from '../config.js'
 
 function ModelPreset({ cfg, setCfg }) {
-  const current = MODEL_PRESETS.find((p) => PRESET_KEYS.every((k) => cfg.config[k] === p[k]))
+  const current = MODEL_PRESETS.find((p) => PRESET_MATCH_KEYS.every((k) => cfg.config[k] === p[k]))
   const apply = (name) => {
     const p = MODEL_PRESETS.find((m) => m.name === name)
     if (!p) return
     const patch = Object.fromEntries(PRESET_KEYS.map((k) => [k, p[k]]))
     setCfg({ ...cfg, config: { ...cfg.config, ...patch } })
   }
+  const quant = QUANT_OPTIONS.find(([, b]) => b === cfg.config.DTYPE_BYTES)
   const weightGB = cfg.config.PARAMS * cfg.config.DTYPE_BYTES / 1e9
   const minHbm = Math.min(...cfg.cluster.map((c) => cfg.specs[c.spec]?.hbm_cap ?? Infinity)) / 1e9
   return (
@@ -20,8 +22,20 @@ function ModelPreset({ cfg, setCfg }) {
           {MODEL_PRESETS.map((p) => <option key={p.name}>{p.name}</option>)}
         </select>
       </div>
+      <div className="field">
+        <label>quantization</label>
+        <select style={{ width: 150 }} value={quant?.[0] ?? 'custom'}
+                onChange={(e) => {
+                  const opt = QUANT_OPTIONS.find(([label]) => label === e.target.value)
+                  if (opt) setCfg({ ...cfg, config: { ...cfg.config, DTYPE_BYTES: opt[1] } })
+                }}>
+          {!quant && <option value="custom">custom</option>}
+          {QUANT_OPTIONS.map(([label]) => <option key={label}>{label}</option>)}
+        </select>
+      </div>
       <div className="sub" style={{ margin: '2px 0 6px' }}>
-        weights {weightGB.toFixed(0)} GB fp16
+        weights {weightGB >= 100 ? weightGB.toFixed(0) : weightGB.toPrecision(3)} GB
+        {quant ? ` ${quant[0].split(' ')[0]}` : ''}
         {weightGB > minHbm && ` — exceeds smallest GPU's ${minHbm.toFixed(0)} GB HBM`}
       </div>
     </>

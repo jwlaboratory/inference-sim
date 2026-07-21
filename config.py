@@ -22,8 +22,9 @@ BLOCK_TOKENS = 256          # tokens per prefix-hash block (Mooncake block size)
 
 # --------------------------------------------------------------------- gpu.py
 # model being served (8B-class, fp16 weights, GQA) — must fit in one GPU's HBM
-PARAMS = 8e9
-DTYPE_BYTES = 2
+PARAMS = 8e9          # total weights (HBM footprint)
+ACTIVE_PARAMS = 8e9   # weights touched per token; < PARAMS for MoE, else = PARAMS
+DTYPE_BYTES = 2       # bytes per weight/KV element (2 fp16, 1 fp8/int8, 0.5 int4)
 LAYERS, KV_HEADS, HEAD_DIM = 32, 8, 128
 
 MFU = 0.5   # achieved fraction of peak compute during prefill
