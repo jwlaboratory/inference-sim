@@ -79,3 +79,16 @@ python3 bite-the-bullet/evaluate_art_warming.py \
 ```
 
 See `RESULTS.md` for the Mooncake HBM-only cache-aware threshold sweep.
+
+## Synthetic Labeling-Spike Benchmark
+
+Create a separate synthetic trace with large data-labeling-style fanouts and
+sweep predictor precision/recall:
+
+```bash
+python3 bite-the-bullet/synthetic_trace_benchmark.py
+```
+
+The default benchmark uses several 500-request bursts with the same long
+prefix, plus decoy long-prefix jobs for false positives. It reports when
+`predict_fake_prefill` and `predict_seed_real` beat cache-aware routing.
