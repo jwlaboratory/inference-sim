@@ -10,6 +10,8 @@ imbalanced (both thresholds exceeded, as in balance_abs/rel_threshold).
 """
 import random
 
+from rl.learned import Learned
+
 
 def load(node, now):
     return len(node.running) + len(node.waiting)
@@ -62,4 +64,4 @@ class CacheAware:
 
 
 POLICIES = {"cache_aware": CacheAware, "least_load": LeastLoad,
-            "round_robin": RoundRobin, "random": Random}
+            "round_robin": RoundRobin, "random": Random, "learned": Learned}

@@ -23,12 +23,13 @@ proxies /api to :8000). `npm run build` refreshes what server.py serves.
 
 ```
 config.py     every tunable, grouped by consumer; defaults for everything
-workload.py   fetches a window of the HF trace -> list[Request]
-router.py     cache_aware | least_load | round_robin | random (SGLang-style)
-gpu.py        Node (n GPUs serving together) + timing equations + KV prefix cache
-simulate.py   the event loop: route -> admit (prefix reuse + prefill) -> batched decode
-server.py     FastAPI: serves ui/dist and POST /api/simulate
-ui/           React (Vite) frontend: config editor, metrics, Gantt playback
+workload.py    fetches a window of the HF trace -> list[Request]
+router.py      heuristic policies + policy registry
+gpu.py         Node (n GPUs serving together) + timing equations + KV prefix cache
+simulate.py    the event loop: route -> admit (prefix reuse + prefill) -> batched decode
+server.py      FastAPI: serves ui/dist and POST /api/simulate
+rl/            learned router policy, CEM trainer, and saved weights
+ui/            React (Vite) frontend: config editor, metrics, Gantt playback
 ```
 
 **Workload.** Requests come from a Mooncake-format trace
