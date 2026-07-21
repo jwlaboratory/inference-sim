@@ -1,105 +1,126 @@
-# We Built An Open-Source Simulator For LLM Inference Scheduling
+# Infer-Sim: An Open-Source Simulator For Routing Algorithms And Cache Policies For Inference Workloads
 
 Status: draft.
 
-Working title options:
+Repo name: `inference-sim`.
 
-- We Built An Open-Source Simulator For LLM Inference Scheduling
-- A Small Simulator For Reasoning About LLM Inference Queues
-- Before Renting 64 H100s, Simulate The Queue
-- Inference-Sim: A Playground For Prefix Caches, Routers, And GPU Queues
+## TLDR
 
-## Narrative Plan
+Inference optimization is painful because many ideas cannot be tested cleanly
+without production-like traffic. Logs tell you what happened, but they do not
+make it easy to ask what would have happened under a different router, cache
+policy, batch size, model, or GPU cluster.
 
-1. Open with the problem: inference systems are hard to reason about because
-   small routing choices interact with prefix caches, queues, batching, and GPU
-   memory.
-2. Explain why dashboards alone are not enough: production traces tell you what
-   happened, but not always what would have happened under a different router.
-3. Introduce `inference-sim`: a small, composable simulator for replaying LLM
-   inference traces across configurable GPU clusters.
-4. Explain what it models:
-   continuous batching, prefill, decode, prefix-cache tiers, RDMA, disk, host
-   RAM, GPU specs, tensor-parallel replicas, and pluggable routing policies.
-5. Show why this matters with one concrete case study: same-prefix burst
-   scheduling and predictive KV warming.
-6. Be honest about the simulator boundary: mechanism validation, not a
-   substitute for hardware benchmarking.
-7. Invite people to use it to test routers, traces, hardware choices, and cache
-   policies.
-8. End with launch roadmap: docs, examples, more traces, plugin policies, and
-   better dtype modeling.
+Infer-Sim is a lightweight open-source simulator for replaying inference traces
+through configurable routing policies, prefix-cache tiers, batching behavior,
+and GPU clusters. The goal is to make inference-scheduling ideas cheap to test,
+easy to visualize, and easier to argue about.
 
-## Draft
+## Motivation
 
-LLM inference systems are full of tradeoffs that sound simple until you try to
-reason about them precisely.
+One of the biggest problems I noticed during my time at Morph was how difficult
+it was to test theories about inference optimizations.
 
-Should a request go to the GPU that already has its prefix cached, or to the GPU
-with the shortest queue? Should the scheduler prefill aggressively, or protect
-decode throughput? Is a larger batch helping throughput, or is it just hiding a
-tail-latency problem? If a prefix cache lives on another node, is it faster to
-fetch over RDMA or recompute?
+Testing a new idea often meant shipping code, watching production dashboards,
+and waiting days before knowing whether the change helped. Even then, it was
+hard to know why something improved or regressed. Raw logs are difficult to
+visualize. A queue build-up can hide inside aggregate latency. A p95 TTFT spike
+can come from prefill, decode, routing, cache misses, or plain old overload.
 
-The annoying answer is usually: it depends.
+And inference systems are full of knobs.
 
-It depends on the model shape, the KV layout, the GPU, the interconnect, the
-prompt length, the output length, the batch size, and the exact arrival pattern.
-The same routing policy can look brilliant on one workload and terrible on
-another.
+The same router can behave differently depending on:
 
-That is why we built `inference-sim`: a small open-source simulator for LLM
-inference clusters.
+- the arrival pattern of live traffic;
+- prompt length and output length distributions;
+- model size and active parameters;
+- KV cache size;
+- quantization;
+- batch size;
+- GPU memory bandwidth;
+- interconnect bandwidth;
+- cache locality;
+- whether the cache lives in HBM, host RAM, disk, or another node.
 
-The goal is not to replace real benchmarking. The goal is to make inference
-scheduling ideas cheap to test before you turn them into a distributed systems
-project.
+That makes backtesting hard. Production traffic is often the only thing that
+stresses your system in the right way, but production is the worst place to
+debug a scheduling theory from scratch.
 
-## The Problem: Routing Is Not A Local Decision
+Infer-Sim is an attempt to make that loop shorter.
 
-In a serving cluster, a request does not just consume "one GPU slot."
+Instead of immediately pushing a routing change to production, you can replay a
+trace, change the router, change the GPU cluster, change the model, change the
+cache policy, and inspect what happens.
 
-It moves through several coupled systems:
+It is not a replacement for real benchmarking. It is a way to test mechanisms
+before they become distributed-systems projects.
 
-- a queue;
-- a prefill stage that reads the input prompt;
-- a decode stage that emits tokens one at a time;
-- a prefix cache that may or may not already contain useful KV;
-- a batching system that groups active decodes;
-- a memory budget shared by model weights and KV cache;
-- a network or storage path if cache is remote.
+## What You Can Tune
 
-This coupling is why intuitive routing policies can fail.
+Infer-Sim replays inference requests through a configurable cluster. The current
+simulator lets you tune:
 
-Cache affinity is a good example. If a request shares a long prefix with earlier
-requests, routing it to the same replica can save a large prefill. But if 500
-requests with that prefix arrive in one second, strict cache affinity may build
-a massive queue on one replica while other replicas are idle.
+- Mooncake-compatible trace dataset;
+- request arrival speed/frequency;
+- model parameters;
+- active parameters per token;
+- layers;
+- KV heads and head dimension;
+- dtype/quantization proxy;
+- max serving batch size;
+- router policy;
+- cache-aware routing thresholds;
+- GPU type;
+- number of nodes;
+- GPUs per node;
+- FLOPs;
+- HBM bandwidth and capacity;
+- host RAM bandwidth;
+- RDMA bandwidth;
+- disk bandwidth;
+- prefix-cache block size;
+- HBM/RAM/disk cache behavior.
 
-Least-load routing has the opposite failure mode. It spreads the queue, but may
-force multiple replicas to recompute the same long prefix.
+The goal is not to hide the knobs. The goal is to make them explicit.
 
-Cache-aware routing tries to balance both, but the question remains: under which
-workloads and hardware configurations does it actually win?
+## What You Can Visualize
 
-That is the kind of question a simulator should make easy to ask.
+The simulator has both a CLI and a small UI. You can inspect:
 
-## What `inference-sim` Models
+- mean latency;
+- p95 latency;
+- mean TTFT;
+- p95 TTFT;
+- cache-hit rate;
+- node utilization;
+- per-node request routing;
+- backlog queues;
+- peak queue size;
+- request timelines;
+- prefill and decode spans;
+- where routing decisions created or avoided queues.
 
-`inference-sim` is intentionally small. The core files are:
+The visualization matters because averages are often too polite.
 
-- `config.py`: every tunable in one place;
+A routing policy can improve mean latency while quietly creating a tail problem
+on one node. Or a cache policy can increase hit rate while still hurting TTFT
+because it sends too many requests to the same replica.
+
+Seeing the queue is different from reading a table.
+
+## What The Simulator Models
+
+Infer-Sim is small on purpose. The core engine is just a handful of files:
+
+- `config.py`: all tunables;
 - `workload.py`: trace loading and request construction;
-- `gpu.py`: node timing equations and prefix-cache behavior;
+- `gpu.py`: GPU timing equations and prefix-cache behavior;
 - `router.py`: routing policies;
 - `simulate.py`: event loop;
 - `server.py`: API for the UI;
-- `ui/`: a React UI for editing configs and visualizing runs.
+- `ui/`: React UI for interactive runs.
 
-The simulator replays a window from an inference trace and routes each request
-through a configurable cluster.
-
-It models:
+The simulator models:
 
 - continuous batching;
 - prefill timing;
@@ -107,13 +128,54 @@ It models:
 - model weight memory;
 - KV cache memory;
 - prefix block reuse;
-- HBM, host RAM, disk, and peer-node cache tiers;
-- RDMA bandwidth;
-- configurable GPU specs;
-- tensor-parallel replicas;
+- HBM cache;
+- host RAM cache;
+- disk cache;
+- remote peer cache over RDMA;
+- tensor-parallel nodes;
+- independent serving replicas;
 - pluggable routing policies.
 
-The timing model is deliberately transparent.
+The built-in routing policies include cache-aware and least-load baselines, but
+the point is to make it easy to add your own.
+
+## How We Approximate Each Variable
+
+The simulator uses simple, inspectable equations. That is a feature. If a number
+looks surprising, you should be able to trace where it came from.
+
+### Requests
+
+Requests are replayed from a Mooncake-compatible trace format. Each row includes
+arrival time, input length, output length, and prefix block hashes.
+
+The arrival gaps can be scaled to stress the system:
+
+```text
+arrival_time = recorded_arrival_time * ARRIVAL_SCALE
+```
+
+Lower arrival scale means a hotter replay. Higher arrival scale means a calmer
+replay.
+
+### Prefix Cache
+
+Prompts are represented as blocks. Two requests share a prefix when their
+leading block hashes match.
+
+This lets the simulator model exact prefix-cache reuse without tokenizing the
+text again.
+
+For each request, the simulator finds the longest cached prefix available from:
+
+- local HBM;
+- local host RAM;
+- peer node over RDMA;
+- disk.
+
+It uses the cached prefix only when loading it is faster than recomputing it.
+
+### Prefill
 
 Prefill is modeled as compute-bound:
 
@@ -121,57 +183,98 @@ Prefill is modeled as compute-bound:
 prefill_time = 2 * active_params * tokens / (flops * MFU)
 ```
 
-Decode is modeled as memory-bound across the whole active batch:
+This captures the intuition that long prompts are expensive because the model
+has to process every input token.
+
+### Decode
+
+Decode is modeled as memory-bound across the active batch:
 
 ```text
 decode_step_time =
   (active_weight_bytes + batch_kv_bytes) / (hbm_bandwidth * MBU)
 ```
 
-Cache movement is modeled as:
+The active weights are read once for the batch, while each sequence contributes
+KV traffic.
+
+### Cache Movement
+
+Cache movement is modeled as bandwidth-bound:
 
 ```text
 cache_load_time = kv_bytes / tier_bandwidth
 ```
 
-These equations are not a full production serving stack. They are a set of
-simple, inspectable assumptions that make routing experiments reproducible.
+Different tiers use different bandwidths:
 
-## Why Prefix Blocks Matter
+- HBM is effectively local;
+- host RAM uses PCIe bandwidth;
+- peer cache uses RDMA bandwidth;
+- disk uses local disk bandwidth.
 
-The simulator works with block-level prompt hashes. Two requests share prefix
-cache if their leading block hashes match.
+### GPU Cluster
 
-That lets us ask questions like:
+Each node is a group of GPUs serving together with tensor parallelism. Compute,
+HBM bandwidth, HBM capacity, RAM bandwidth, RDMA bandwidth, and disk bandwidth
+are aggregated across the GPUs in the node.
 
-- How much TTFT comes from queueing versus prefill?
-- Does cache-aware routing improve or worsen p95 latency?
-- When is it faster to fetch remote KV than recompute?
-- How much HBM is consumed by a warmed prefix?
-- What happens if a batch of similar requests arrives at once?
+Nodes are independent serving replicas. Each node must fit the model in its
+combined HBM.
 
-The last question turned into one of our first case studies.
+### Queueing And Batching
 
-## Case Study: Same-Prefix Bursts
+Each node has a queue. Requests wait until they can be admitted. Decode runs as
+a continuous batch up to `MAX_BATCH`.
 
-Consider this workload:
+Prefill pauses decode in the current model, which approximates
+prefill-prioritizing schedulers and makes prefill/queue interactions visible.
+
+## Why This Is Useful
+
+The simulator is useful for questions like:
+
+- Should this workload use cache-aware routing or least-load routing?
+- How sensitive is p95 TTFT to the cache-aware threshold?
+- Does a bigger batch help throughput or just hide queueing?
+- When is remote KV faster than recomputing?
+- When does cache affinity hurt tail latency?
+- How much HBM does a prefix-cache policy consume?
+- What happens if the same workload runs on H100s instead of A100s?
+- How much prediction lead time does a speculative policy need?
+
+These are not questions you want to answer by guessing.
+
+## Case Study: Biting The Bullet
+
+The first research project we built on top of Infer-Sim was **Biting the
+Bullet**.
+
+The idea is simple: when a large batch of same-prefix requests is about to
+arrive, predict it and speculatively prefill the shared prefix on multiple
+replicas before the queue forms.
+
+This targets workloads like:
+
+- data-labeling fanout;
+- agent/subagent fanout;
+- scoring many records against one shared document;
+- batch jobs with shared system/tool prefixes.
+
+The clean synthetic workload:
 
 - 8 burst jobs;
 - 500 requests per burst;
 - 65,536-token shared prefix;
-- 256-token unique suffix per request;
+- 256-token unique suffix;
 - 1 output token;
-- burst window: 1 second;
-- max serving batch: 256;
+- 1 second burst window;
 - no RDMA;
-- HBM-only cache.
-
-This models labeling, scoring, extraction, and agent fanout workloads where many
-requests share a long context but ask for tiny outputs.
+- HBM-only cache;
+- max serving batch: 256.
 
 On a GLM-like 744B MoE proxy with 8 replicas x 8 H100s, cache-aware routing got
-p95 TTFT to 1.313 seconds. Then we tested speculative prefix warming: prefill
-part of the shared prefix on extra replicas before the burst arrives.
+p95 TTFT to 1.313 seconds. Predictive warming reduced it sharply:
 
 | Warm depth | p95 TTFT | p95 reduction vs cache-aware | Warm KV | Warm busy time |
 | --- | ---: | ---: | ---: | ---: |
@@ -179,7 +282,7 @@ part of the shared prefix on extra replicas before the burst arrives.
 | 32,768 tokens | 0.651s | 50.4% | 23.6 GB | 21.2s |
 | 65,536 tokens | 0.005s | 99.6% | 47.1 GB | 42.4s |
 
-We also ran the same burst on standard Llama-70B/H100 configurations:
+We also tested the same burst on more standard Llama-70B/H100 simulated systems:
 
 | System | Lead time | Cache-aware p95 | Best warm p95 | p95 reduction |
 | --- | ---: | ---: | ---: | ---: |
@@ -188,99 +291,54 @@ We also ran the same burst on standard Llama-70B/H100 configurations:
 | Llama-70B fp16, 8 replicas x 8 H100 | 6s | 2.339s | 0.290s | 87.6% |
 | GLM-like 744B MoE, 8 replicas x 8 H100 | 6s | 1.313s | 0.005s | 99.6% |
 
-This is exactly why we wanted a simulator. The point is not only that the idea
-worked. The point is that we could sweep hardware shapes, routing policies,
-prefix depth, and lead time quickly enough to find the boundary.
+That gave us a strong but scoped result:
 
-And there is a boundary.
+> On synchronized same-prefix bursts, speculative prefix warming can reduce p95
+> TTFT by 67-99% on H100-class simulated deployments.
 
-On Llama-70B with 8 replicas x 4 A100s and only 6 seconds of prediction lead
-time, warming a deep prefix was too slow. The p95 got worse. A shallow 16k-token
-warm was roughly p95-neutral and improved mean TTFT by 10.5%. With 40 seconds
-of lead time, full warming improved mean TTFT by 54.0%, but p95 only by 5.1%.
+But the simulator also found the boundary.
 
-That result matters as much as the win. The simulator did not just say "cool
-idea." It said:
+On Llama-70B with 8 replicas x 4 A100s and only 6 seconds of lead time, warming
+a deep prefix was too slow and p95 got worse. A shallow 16k-token warm was
+roughly p95-neutral and improved mean TTFT by 10.5%. With 40 seconds of lead
+time, full warming improved mean TTFT by 54.0%, but p95 only by 5.1%.
+
+This is exactly what we want from a simulator: not just a positive result, but
+the rule around it.
+
+For this policy, the rule is:
 
 ```text
-only warm a prefix depth that can finish before the burst
+only warm a prefix depth that can finish before the predicted burst
 ```
 
-That is the kind of design rule you want before implementing a production
-system.
+Without a simulator, that kind of boundary is easy to miss.
 
-## What The Simulator Is Good For
+## What Infer-Sim Is Not
 
-`inference-sim` is useful when you want to compare mechanisms, not when you want
-to certify final production numbers.
+Infer-Sim is not a production benchmark.
 
-Good uses:
+It does not replace:
 
-- test a new routing policy against cache-aware and least-load baselines;
-- replay trace windows under different cluster shapes;
-- estimate whether prefix cache movement is worth it;
-- compare H100, H200, B200, A100, or custom GPU specs;
-- reason about TTFT versus throughput;
-- produce reproducible figures for a systems blog or paper;
-- find counterexamples before you overclaim.
+- profiling a real serving stack;
+- measuring kernel overheads;
+- testing on real hardware;
+- validating against live traffic;
+- understanding scheduler-specific implementation details.
 
-Bad uses:
+The simulator is for mechanism exploration. It helps answer:
 
-- claiming exact vendor benchmark numbers;
-- replacing kernel-level profiling;
-- ignoring real scheduler overheads;
-- assuming all production traces have the same burst structure.
+> Is this idea plausible enough to implement?
 
-The simulator should be a microscope, not an oracle.
-
-## Design Principles
-
-We tried to keep the project opinionated in a few ways.
-
-**All tunables should be visible.** Model size, active parameters, KV shape,
-GPU specs, cache tiers, batch size, routing thresholds, trace offsets, and
-arrival scaling all live in config or CLI flags.
-
-**Policies should be pluggable.** A routing idea should be a small function
-that can be compared against baselines on the same workload.
-
-**The UI should make queues visible.** Looking at mean latency is not enough.
-The useful questions are often visual: which node built a queue, which request
-waited, and where did prefill block decode?
-
-**Negative results should be easy to find.** A simulator is most useful when it
-can disprove your favorite idea cheaply.
-
-## Open-Source Launch
-
-We are preparing `inference-sim` as an open-source project because inference
-scheduling research needs more shared testbeds.
-
-There are many excellent serving systems, but they are often too heavy for a
-quick thought experiment. There are also many papers with bespoke simulators
-that are hard to reproduce. We want something in the middle: small enough to
-read, realistic enough to catch important tradeoffs, and easy to extend.
-
-The first public version should include:
-
-- CLI simulation runs;
-- React UI for visual inspection;
-- trace replay from public datasets;
-- documented timing equations;
-- routing baselines;
-- predictive warming experiments;
-- launch examples with saved JSON outputs.
-
-The roadmap after launch:
-
-- split weight dtype and KV dtype;
-- add more trace adapters;
-- add more serving policies;
-- improve disaggregated cache modeling;
-- add tests around timing equations and routing invariants;
-- package reproducible benchmark scripts.
+It should not be used to claim exact production latency.
 
 ## Try It
+
+GitHub:
+
+```text
+https://github.com/jwlaboratory/inference-sim
+```
 
 Quickstart:
 
@@ -302,19 +360,26 @@ Or run the CLI:
 python3 simulate.py
 ```
 
-The simulator is small on purpose. Read `config.py`, change one thing, rerun,
-and see whether your intuition survives contact with a queue.
+The first run replays a public trace window. From there, edit `config.py` or use
+the UI to change model shape, GPU cluster, batch size, arrival rate, and routing
+policy.
 
-That is the whole point.
+## Feedback And Extensions
 
-## Short Ending
+Please try it and share feedback. We would love extensions to the open-source
+repository, especially:
 
-Modern LLM inference is no longer just "make the model faster."
+- new routing policies;
+- new trace adapters;
+- better cache policies;
+- better disaggregated-cache modeling;
+- more GPU specs;
+- more visualizations;
+- validation against real serving measurements.
 
-It is queues, caches, batches, memory, interconnects, workloads, and routing
-policies all colliding at once.
+The broader hope is that inference-scheduling ideas become easier to test and
+harder to overclaim.
 
-`inference-sim` is our attempt to make those collisions visible.
+Logs are where you see what happened.
 
-If you are building an inference scheduler, testing a cache policy, or arguing
-about where a request should go, we hope this gives you a cheap place to start.
+Infer-Sim is where you can ask what would have happened.
