@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "buildCommand": "cd ui && npm ci && npm run build",
+  "functions": {
+    "server.py": {
+      "maxDuration": 60
+    }
+  }
+}

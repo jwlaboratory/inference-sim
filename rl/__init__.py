@@ -1,1 +1,1 @@
-"""Training artifacts for learned routing policies."""
+"""Runtime router policies for inference-sim."""
