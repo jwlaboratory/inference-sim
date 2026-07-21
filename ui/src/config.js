@@ -4,9 +4,9 @@ export const DEFAULT_CONFIG = {
   config: {
     SEED: 42, NUM_REQUESTS: 400,
     DATASET: 'alessiotoniolo/ART-Chat-2.5M', DATASET_SPLIT: 'train',
-    DATASET_OFFSET: -1, ARRIVAL_SCALE: 4, BLOCK_TOKENS: 256,
-    PARAMS: 8e9, ACTIVE_PARAMS: 8e9, DTYPE_BYTES: 2,
-    LAYERS: 32, KV_HEADS: 8, HEAD_DIM: 128,
+    DATASET_OFFSET: -1, ARRIVAL_SCALE: 1, BLOCK_TOKENS: 256,
+    PARAMS: 70.6e9, ACTIVE_PARAMS: 70.6e9, DTYPE_BYTES: 2,
+    LAYERS: 80, KV_HEADS: 8, HEAD_DIM: 128,
     MFU: 0.5, MBU: 0.8, MAX_BATCH: 256,
     IMBALANCE_ABS: 8, IMBALANCE_REL: 1.5, DISK_CACHE: true,
   },
@@ -26,8 +26,8 @@ export const DEFAULT_CONFIG = {
      parallel — compute/bandwidth/HBM aggregate). Nodes are independent
      replicas; the model must fit in every node's combined HBM. */
   cluster: [
-    { name: 'node0', spec: 'H100', gpus: 1 }, { name: 'node1', spec: 'H100', gpus: 1 },
-    { name: 'node2', spec: 'H100', gpus: 1 }, { name: 'node3', spec: 'H100', gpus: 1 },
+    { name: 'node0', spec: 'H100', gpus: 4 }, { name: 'node1', spec: 'H100', gpus: 4 },
+    { name: 'node2', spec: 'H100', gpus: 4 }, { name: 'node3', spec: 'H100', gpus: 4 },
   ],
 }
 
@@ -102,7 +102,7 @@ export const SPEC_FIELDS = [
   ['ram_bw', 'PCIe GB/s', 1e9], ['rdma_bw', 'RDMA GB/s', 1e9], ['disk_bw', 'disk GB/s', 1e9],
 ]
 
-export const POLICY_NAMES = ['cache_aware', 'least_load', 'round_robin', 'random']
+export const POLICY_NAMES = ['learned', 'cache_aware', 'least_load', 'round_robin', 'random']
 
 /* Marks are colored by where the request's prefix was served from. */
 export const TIERS = ['hbm', 'ram', 'rdma', 'disk', 'miss']
@@ -124,3 +124,7 @@ export const fmtT = (s) =>
   s >= 3600 ? `${(s / 3600).toFixed(1)}h`
   : s >= 60 ? `${Math.floor(s / 60)}m${String(Math.floor(s % 60)).padStart(2, '0')}s`
   : `${s.toFixed(s < 10 ? 1 : 0)}s`
+
+/* Precise variant for stat tiles and tables — keeps sub-second detail. */
+export const fmtTP = (s) =>
+  s >= 60 ? fmtT(s) : s >= 1 ? `${s.toFixed(2)}s` : `${Math.round(s * 1000)}ms`

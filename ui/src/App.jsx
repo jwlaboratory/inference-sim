@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { DEFAULT_CONFIG, POLICY_NAMES, TIERS, TIER_COLOR, TIER_DESC, QUEUE_DESC, fmtT } from './config.js'
+import { DEFAULT_CONFIG, POLICY_NAMES, TIERS, TIER_COLOR, TIER_DESC, QUEUE_DESC, fmtT, fmtTP } from './config.js'
 import ConfigPanel from './components/ConfigPanel.jsx'
 import Gantt from './components/Gantt.jsx'
 import GpuCards from './components/GpuCards.jsx'
@@ -101,12 +101,26 @@ export default function App() {
         </div>
 
         <div className="tiles">
-          {[['mean latency', fmtT(m.mean_lat)], ['p95 latency', fmtT(m.p95_lat)],
-            ['mean TTFT', fmtT(m.mean_ttft)], ['throughput', `${Math.round(m.throughput)} tok/s`],
-            ['prefix reuse (any tier)', `${Math.round(m.cache_hit * 100)}%`],
-            ['from local HBM', `${Math.round(m.hbm_hit * 100)}%`],
-            ['node utilization', `${Math.round(m.util * 100)}%`]].map(([k, v]) => (
-            <div className="card tile" key={k}><div className="v">{v}</div><div className="k">{k} · {policy}</div></div>
+          {[['mean latency', fmtTP(m.mean_lat),
+             `End-to-end request time, arrival → last token.\n`
+             + `p50 ${fmtTP(m.p50_lat)} · p95 ${fmtTP(m.p95_lat)} · max ${fmtTP(m.max_lat)}\n`
+             + `Mean breakdown: queue ${fmtTP(m.mean_queue)} + prefill ${fmtTP(m.mean_prefill)}`
+             + ` + decode ${fmtTP(m.mean_decode)}`],
+            ['p95 latency', fmtTP(m.p95_lat),
+             '95% of requests finished within this time of arriving.'],
+            ['mean TTFT', fmtTP(m.mean_ttft),
+             'Time to first token: queue wait + prefix load + prefill.'],
+            ['peak queue', fmtTP(m.peak_queue),
+             'Longest any single request sat in a node’s waiting queue before being admitted to a decode batch.'],
+            ['throughput', `${Math.round(m.throughput)} tok/s`,
+             'Output tokens generated per second of simulated time. When node utilization is low this is limited by how fast the trace sends requests, not by the hardware.'],
+            ['prefix reuse (any tier)', `${Math.round(m.cache_hit * 100)}%`,
+             'Share of reusable prefix tokens served from some cache tier instead of recomputed.'],
+            ['from local HBM', `${Math.round(m.hbm_hit * 100)}%`,
+             'Share of reusable prefix tokens already resident in the serving node’s HBM.'],
+            ['node utilization', `${Math.round(m.util * 100)}%`,
+             'Fraction of the run nodes spent prefilling or decoding (vs sitting idle).']].map(([k, v, d]) => (
+            <div className="card tile" key={k} title={d}><div className="v">{v}</div><div className="k">{k} · {policy}</div></div>
           ))}
         </div>
 
@@ -136,6 +150,7 @@ export default function App() {
           <div className="hd">Policy comparison — same trace</div>
           <table>
             <thead><tr><th>policy</th><th>mean lat</th><th>p95 lat</th><th>mean TTFT</th>
+              <th title="Longest any request waited in a node queue before admission">peak queue</th>
               <th>reuse</th><th>hbm hit</th><th>util</th></tr></thead>
             <tbody>
               {POLICY_NAMES.map((p) => {
@@ -143,8 +158,9 @@ export default function App() {
                 return (
                   <tr key={p} className={p === policy ? 'sel' : ''}
                       onClick={() => { setPolicy(p); setT(0); setPlaying(false) }}>
-                    <td>{p}</td><td>{fmtT(mm.mean_lat)}</td><td>{fmtT(mm.p95_lat)}</td>
-                    <td>{fmtT(mm.mean_ttft)}</td><td>{Math.round(mm.cache_hit * 100)}%</td>
+                    <td>{p}</td><td>{fmtTP(mm.mean_lat)}</td><td>{fmtTP(mm.p95_lat)}</td>
+                    <td>{fmtTP(mm.mean_ttft)}</td><td>{fmtTP(mm.peak_queue)}</td>
+                    <td>{Math.round(mm.cache_hit * 100)}%</td>
                     <td>{Math.round(mm.hbm_hit * 100)}%</td>
                     <td>{Math.round(mm.util * 100)}%</td>
                   </tr>

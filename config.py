@@ -17,17 +17,17 @@ NUM_REQUESTS = 400          # window length: how many consecutive requests
 DATASET = "alessiotoniolo/ART-Chat-2.5M"
 DATASET_SPLIT = "train"
 DATASET_OFFSET = -1         # start row; -1 = random point (derived from SEED)
-ARRIVAL_SCALE = 4.0         # multiply real inter-arrival gaps (>1 = calmer)
+ARRIVAL_SCALE = 1.0         # multiply real inter-arrival gaps (>1 = calmer)
 BLOCK_TOKENS = 256          # tokens per prefix-hash block (Mooncake block size)
 
 # --------------------------------------------------------------------- gpu.py
-# model being served (8B-class, fp16 weights, GQA) — must fit in every node's
-# combined HBM (weights are sharded across a node's GPUs; the run errors out
-# if any node is too small)
-PARAMS = 8e9          # total weights (HBM footprint)
-ACTIVE_PARAMS = 8e9   # weights touched per token; < PARAMS for MoE, else = PARAMS
+# model being served (Llama 3.3 70B, fp16 weights, GQA) — must fit in every
+# node's combined HBM (weights are sharded across a node's GPUs; the run
+# errors out if any node is too small)
+PARAMS = 70.6e9       # total weights (HBM footprint)
+ACTIVE_PARAMS = 70.6e9  # weights touched per token; < PARAMS for MoE, else = PARAMS
 DTYPE_BYTES = 2       # bytes per weight/KV element (2 fp16, 1 fp8/int8, 0.5 int4)
-LAYERS, KV_HEADS, HEAD_DIM = 32, 8, 128
+LAYERS, KV_HEADS, HEAD_DIM = 80, 8, 128
 
 MFU = 0.5   # achieved fraction of peak compute during prefill
 MBU = 0.8   # achieved fraction of peak HBM bandwidth during decode
@@ -65,8 +65,8 @@ IMBALANCE_REL = 1.5    # max_load > REL * min_load
 # cluster = list of nodes: (name, GPUSpec, gpu count). GPUs within a node
 # serve together (tensor parallel: compute/bandwidth/HBM aggregate); nodes
 # are independent replicas and only share prefix caches over RDMA.
-CLUSTER = [("node0", H100, 1), ("node1", H100, 1),
-           ("node2", H100, 1), ("node3", H100, 1)]
+CLUSTER = [("node0", H100, 4), ("node1", H100, 4),
+           ("node2", H100, 4), ("node3", H100, 4)]
 MAX_BATCH = 256     # max sequences decoding together on one node
 DISK_CACHE = True   # every computed prefix block is also persisted to local NVMe
 

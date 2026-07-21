@@ -4,7 +4,7 @@ PRED_OUT = 52.0   # decode-length guess; true output length is not observable
 
 
 def _step_s(nd):
-    """Per-decode-step weight-read time on this node (batch-shared)."""
+    """Per-decode-step weight-read time on this node."""
     return nd.active_bytes / (nd.hbm_bw * nd.cfg.MBU)
 
 
