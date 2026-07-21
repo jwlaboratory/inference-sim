@@ -1,9 +1,10 @@
 # inference-sim
 
 A small, composable simulator for LLM inference clusters. It replays a
-window of a real production trace, routes each request to a GPU with a
-pluggable policy, and models prefill/decode/prefix-cache timing from first
-principles. A React UI visualizes the run and lets you edit every tunable.
+window of a real production trace, routes each request to a node with a
+pluggable policy, and models continuous batching, prefill/decode, and
+prefix-cache timing from first principles. A React UI visualizes the run
+and lets you edit every tunable.
 
 ## Quickstart
 
@@ -24,8 +25,8 @@ proxies /api to :8000). `npm run build` refreshes what server.py serves.
 config.py     every tunable, grouped by consumer; defaults for everything
 workload.py   fetches a window of the HF trace -> list[Request]
 router.py     cache_aware | least_load | round_robin | random (SGLang-style)
-gpu.py        GPUSpec + timing equations + block-granular KV prefix cache
-simulate.py   the event loop: route -> reuse/load/recompute prefix -> prefill -> decode
+gpu.py        Node (n GPUs serving together) + timing equations + KV prefix cache
+simulate.py   the event loop: route -> admit (prefix reuse + prefill) -> batched decode
 server.py     FastAPI: serves ui/dist and POST /api/simulate
 ui/           React (Vite) frontend: config editor, metrics, Gantt playback
 ```
@@ -39,29 +40,45 @@ in the 2.5M-request trace is chosen (reproducible via `SEED`, or pin
 with arrival gaps scaled by `ARRIVAL_SCALE`. Rows stream from the HF
 datasets-server API; nothing is downloaded up front.
 
+**Nodes.** The cluster is a list of nodes, each `n` GPUs of one spec
+serving together (tensor parallel): compute, HBM bandwidth/capacity, PCIe
+and RDMA aggregate across the node's GPUs. Nodes are independent replicas
+— each must hold the full model in its combined HBM (the run errors out
+otherwise) — and only share prefix caches over RDMA.
+
+**Continuous batching.** Each node decodes all admitted requests as one
+batch: a decode step reads the active weights once for the whole batch
+plus every sequence's KV cache, so throughput scales with batch size until
+KV headroom (HBM left after weights) or `MAX_BATCH` is hit. Admission
+(prefix load + prefill) briefly pauses decode, as in prefill-prioritizing
+schedulers; requests wait in a per-node queue until they fit.
+
 **Prefix caching.** Two requests share a prefix exactly when their leading
 block hashes match, so caches operate on the recorded hashes directly. Each
-GPU keeps hot blocks in HBM (LRU), evicting to host RAM; every computed
+node keeps hot blocks in HBM (LRU), evicting to host RAM; every computed
 block is also persisted to disk when `DISK_CACHE` is on. For each request
 the simulator finds the longest cached run of its leading blocks across
-local HBM (free), local RAM (PCIe), a peer GPU (RDMA), or disk — and uses
+local HBM (free), local RAM (PCIe), a peer node (RDMA), or disk — and uses
 it only if loading beats recomputing.
 
-**Timing model** (per GPU, one request at a time — no continuous batching):
+**Timing model** (per node; bandwidths/FLOPs below are node aggregates):
 
-- prefill: `2 * params * tokens / (flops * MFU)` (compute-bound)
-- decode: `out_tokens * (weight_bytes + context_kv_bytes) / (hbm_bw * MBU)` (memory-bound)
+- prefill: `2 * active_params * tokens / (flops * MFU)` (compute-bound)
+- decode step (whole batch, one token each):
+  `(active_weight_bytes + batch_kv_bytes) / (hbm_bw * MBU)` (memory-bound)
 - cache load: `blocks * block_kv_bytes / tier_bandwidth`
 
 **Routing.** `cache_aware` routes to the longest prefix match and falls
 back to least-load when the cluster is imbalanced (SGLang's
-`balance_abs/rel_threshold` scheme).
+`balance_abs/rel_threshold` scheme). Load = requests in flight on a node
+(decode batch + waiting queue).
 
 ## Configuring
 
 Everything lives in `config.py` (the CLI reads it directly; the UI posts
 overrides per run): trace window and arrival scaling, served model shape
-(`PARAMS`, `LAYERS`, `KV_HEADS`, `HEAD_DIM`, `MFU`, `MBU`), router
-thresholds, and the cluster — a list of named GPUs, each with a `GPUSpec`
-(FLOPs, HBM bandwidth/capacity, PCIe, RDMA, disk). Add GPUs or new specs in
-one line each; the UI can also edit all of this live.
+(`PARAMS`, `ACTIVE_PARAMS`, `LAYERS`, `KV_HEADS`, `HEAD_DIM`, `MFU`,
+`MBU`), serving (`MAX_BATCH`), router thresholds, and the cluster — a list
+of nodes `(name, GPUSpec, gpu_count)` where a `GPUSpec` is FLOPs, HBM
+bandwidth/capacity, PCIe, RDMA, disk. Add nodes or new specs in one line
+each; the UI can also edit all of this live.

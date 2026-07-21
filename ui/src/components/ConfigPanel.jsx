@@ -11,7 +11,8 @@ function ModelPreset({ cfg, setCfg }) {
   }
   const quant = QUANT_OPTIONS.find(([, b]) => b === cfg.config.DTYPE_BYTES)
   const weightGB = cfg.config.PARAMS * cfg.config.DTYPE_BYTES / 1e9
-  const minHbm = Math.min(...cfg.cluster.map((c) => cfg.specs[c.spec]?.hbm_cap ?? Infinity)) / 1e9
+  const minHbm = Math.min(...cfg.cluster.map(
+    (c) => (cfg.specs[c.spec]?.hbm_cap ?? Infinity) * (c.gpus || 1))) / 1e9
   return (
     <>
       <div className="field">
@@ -36,7 +37,8 @@ function ModelPreset({ cfg, setCfg }) {
       <div className="sub" style={{ margin: '2px 0 6px' }}>
         weights {weightGB >= 100 ? weightGB.toFixed(0) : weightGB.toPrecision(3)} GB
         {quant ? ` ${quant[0].split(' ')[0]}` : ''}
-        {weightGB > minHbm && ` — exceeds smallest GPU's ${minHbm.toFixed(0)} GB HBM`}
+        {weightGB > minHbm &&
+          ` — exceeds smallest node's ${minHbm.toFixed(0)} GB HBM, run will error`}
       </div>
     </>
   )
@@ -87,11 +89,21 @@ export default function ConfigPanel({ cfg, setCfg, onRun, stale, running }) {
       ))}
       <div className="sect">
         <div className="hd">Cluster</div>
+        <div className="sub" style={{ margin: '2px 0 6px' }}>
+          GPUs in a node serve together (tensor parallel); nodes are independent replicas.
+        </div>
         {cfg.cluster.map((c, i) => (
           <div className="cluster-row" key={i}>
             <input value={c.name} onChange={(e) => {
               const cl = [...cfg.cluster]; cl[i] = { ...c, name: e.target.value }; setCluster(cl)
             }} />
+            <input type="number" min="1" step="1" style={{ width: 44 }}
+              title="GPUs in this node" value={c.gpus || 1} onChange={(e) => {
+                const cl = [...cfg.cluster]
+                cl[i] = { ...c, gpus: Math.max(1, Math.round(+e.target.value) || 1) }
+                setCluster(cl)
+              }} />
+            <span style={{ color: 'var(--muted)' }}>×</span>
             <select value={c.spec} onChange={(e) => {
               const cl = [...cfg.cluster]; cl[i] = { ...c, spec: e.target.value }; setCluster(cl)
             }}>
@@ -103,8 +115,8 @@ export default function ConfigPanel({ cfg, setCfg, onRun, stale, running }) {
         ))}
         <button className="btn" style={{ marginTop: 4 }}
           onClick={() => setCluster([...cfg.cluster,
-            { name: `gpu${cfg.cluster.length}`, spec: Object.keys(cfg.specs)[0] }])}>
-          + add GPU
+            { name: `node${cfg.cluster.length}`, spec: Object.keys(cfg.specs)[0], gpus: 1 }])}>
+          + add node
         </button>
       </div>
       {Object.entries(cfg.specs).map(([name, spec]) => (

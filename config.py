@@ -21,7 +21,9 @@ ARRIVAL_SCALE = 4.0         # multiply real inter-arrival gaps (>1 = calmer)
 BLOCK_TOKENS = 256          # tokens per prefix-hash block (Mooncake block size)
 
 # --------------------------------------------------------------------- gpu.py
-# model being served (8B-class, fp16 weights, GQA) — must fit in one GPU's HBM
+# model being served (8B-class, fp16 weights, GQA) — must fit in every node's
+# combined HBM (weights are sharded across a node's GPUs; the run errors out
+# if any node is too small)
 PARAMS = 8e9          # total weights (HBM footprint)
 ACTIVE_PARAMS = 8e9   # weights touched per token; < PARAMS for MoE, else = PARAMS
 DTYPE_BYTES = 2       # bytes per weight/KV element (2 fp16, 1 fp8/int8, 0.5 int4)
@@ -53,14 +55,19 @@ MI300X = GPUSpec("MI300X", 1307e12, 5.30e12, 192 * GB, 55e9, 50e9, 7e9)
 MI355X = GPUSpec("MI355X", 2500e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
 
 # ------------------------------------------------------------------ router.py
-# cache-aware falls back to least-load when both thresholds are exceeded
-# (keep ABS in the ballpark of one request's service time, or affinity
-# will queue behind busy GPUs to save a cheap prefix load)
-IMBALANCE_ABS = 2.0    # seconds of queued work
+# cache-aware falls back to least-load when both thresholds are exceeded.
+# Load = requests in flight on a node (decode batch + waiting queue), as in
+# the SGLang gateway; keep ABS around a typical batch's worth of requests.
+IMBALANCE_ABS = 8      # in-flight requests
 IMBALANCE_REL = 1.5    # max_load > REL * min_load
 
 # ---------------------------------------------------------------- simulate.py
-CLUSTER = [("gpu0", H100), ("gpu1", H100), ("gpu2", H100), ("gpu3", H100)]
+# cluster = list of nodes: (name, GPUSpec, gpu count). GPUs within a node
+# serve together (tensor parallel: compute/bandwidth/HBM aggregate); nodes
+# are independent replicas and only share prefix caches over RDMA.
+CLUSTER = [("node0", H100, 1), ("node1", H100, 1),
+           ("node2", H100, 1), ("node3", H100, 1)]
+MAX_BATCH = 256     # max sequences decoding together on one node
 DISK_CACHE = True   # every computed prefix block is also persisted to local NVMe
 
 

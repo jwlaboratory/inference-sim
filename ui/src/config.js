@@ -7,8 +7,8 @@ export const DEFAULT_CONFIG = {
     DATASET_OFFSET: -1, ARRIVAL_SCALE: 4, BLOCK_TOKENS: 256,
     PARAMS: 8e9, ACTIVE_PARAMS: 8e9, DTYPE_BYTES: 2,
     LAYERS: 32, KV_HEADS: 8, HEAD_DIM: 128,
-    MFU: 0.5, MBU: 0.8,
-    IMBALANCE_ABS: 2, IMBALANCE_REL: 1.5, DISK_CACHE: true,
+    MFU: 0.5, MBU: 0.8, MAX_BATCH: 256,
+    IMBALANCE_ABS: 8, IMBALANCE_REL: 1.5, DISK_CACHE: true,
   },
   /* flops = peak dense BF16 (no sparsity), matching the H100 989 TF convention.
      ram_bw ≈ realistic PCIe gen for the part; rdma_bw ≈ per-GPU NIC (400G = 50 GB/s,
@@ -22,9 +22,12 @@ export const DEFAULT_CONFIG = {
     MI300X: { flops: 1307e12, hbm_bw: 5.30e12, hbm_cap: 192e9, ram_bw: 55e9,  rdma_bw: 50e9,  disk_bw: 7e9 },
     MI355X: { flops: 2500e12, hbm_bw: 8.00e12, hbm_cap: 288e9, ram_bw: 120e9, rdma_bw: 100e9, disk_bw: 7e9 },
   },
+  /* Each entry is a node: `gpus` GPUs of one spec serving together (tensor
+     parallel — compute/bandwidth/HBM aggregate). Nodes are independent
+     replicas; the model must fit in every node's combined HBM. */
   cluster: [
-    { name: 'gpu0', spec: 'H100' }, { name: 'gpu1', spec: 'H100' },
-    { name: 'gpu2', spec: 'H100' }, { name: 'gpu3', spec: 'H100' },
+    { name: 'node0', spec: 'H100', gpus: 1 }, { name: 'node1', spec: 'H100', gpus: 1 },
+    { name: 'node2', spec: 'H100', gpus: 1 }, { name: 'node3', spec: 'H100', gpus: 1 },
   ],
 }
 
@@ -86,8 +89,11 @@ export const SECTIONS = [
     ['KV_HEADS', 'kv heads', 1, 1], ['HEAD_DIM', 'head dim', 1, 16],
     ['MFU', 'MFU', 1, 0.05], ['MBU', 'MBU', 1, 0.05],
   ]],
+  ['Serving', [
+    ['MAX_BATCH', 'max batch (seqs)', 1, 16],
+  ]],
   ['Router', [
-    ['IMBALANCE_ABS', 'imbalance abs s', 1, 0.5], ['IMBALANCE_REL', 'imbalance rel', 1, 0.1],
+    ['IMBALANCE_ABS', 'imbalance abs (reqs)', 1, 1], ['IMBALANCE_REL', 'imbalance rel', 1, 0.1],
   ]],
 ]
 
@@ -112,7 +118,7 @@ export const TIER_DESC = {
   miss: 'No cached prefix found anywhere — the full prompt had to be prefilled (recomputed) from scratch.',
 }
 export const QUEUE_DESC =
-  'The gray strip under each GPU lane shows how many requests were waiting in that GPU’s queue over time — darker means a deeper backlog.'
+  'The gray strip under each node lane shows how many requests were waiting to be admitted into that node’s decode batch over time — darker means a deeper backlog.'
 
 export const fmtT = (s) =>
   s >= 3600 ? `${(s / 3600).toFixed(1)}h`

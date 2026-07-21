@@ -26,7 +26,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg),
       })
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+      if (!res.ok) {
+        const txt = await res.text()
+        let msg = txt
+        try { msg = JSON.parse(txt).detail || txt } catch { /* not JSON */ }
+        throw new Error(msg)
+      }
       setResult(await res.json())
       setStale(false); setT(0); setPlaying(false)
     } catch (e) {
@@ -97,9 +102,10 @@ export default function App() {
 
         <div className="tiles">
           {[['mean latency', fmtT(m.mean_lat)], ['p95 latency', fmtT(m.p95_lat)],
-            ['mean TTFT', fmtT(m.mean_ttft)], ['prefix reuse (any tier)', `${Math.round(m.cache_hit * 100)}%`],
+            ['mean TTFT', fmtT(m.mean_ttft)], ['throughput', `${Math.round(m.throughput)} tok/s`],
+            ['prefix reuse (any tier)', `${Math.round(m.cache_hit * 100)}%`],
             ['from local HBM', `${Math.round(m.hbm_hit * 100)}%`],
-            ['GPU utilization', `${Math.round(m.util * 100)}%`]].map(([k, v]) => (
+            ['node utilization', `${Math.round(m.util * 100)}%`]].map(([k, v]) => (
             <div className="card tile" key={k}><div className="v">{v}</div><div className="k">{k} · {policy}</div></div>
           ))}
         </div>
@@ -150,7 +156,7 @@ export default function App() {
 
         {tip && tip.e.queue && (
           <div className="tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
-            <div><b>{tip.e.gpu}</b> queue</div>
+            <div><b>{tip.e.node}</b> queue</div>
             <div style={{ color: 'var(--ink-2)', marginTop: 3 }}>
               {tip.e.depth} waiting · {fmtT(tip.e.t0)} → {fmtT(tip.e.t1)}
             </div>
@@ -159,7 +165,7 @@ export default function App() {
         {tip && !tip.e.queue && (
           <div className="tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
             <div><span className="chip" style={{ background: TIER_COLOR[tip.e.tier] }} />
-              <b>#{tip.e.id}</b> {tip.e.group} → {tip.e.gpu}</div>
+              <b>#{tip.e.id}</b> {tip.e.group} → {tip.e.node}</div>
             <div style={{ color: 'var(--ink-2)', marginTop: 3 }}>
               in {tip.e.input_tokens} tok (prefix {tip.e.prefix_tokens}) · out {tip.e.output_tokens} tok<br />
               prefix: {tip.e.hit ? `${tip.e.hit} tok from ${tip.e.tier}` : 'miss'}<br />

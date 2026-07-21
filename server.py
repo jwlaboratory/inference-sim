@@ -10,13 +10,14 @@ POST /api/simulate body (all parts optional; defaults come from config.py):
   {
     "config":  { "NUM_REQUESTS": 400, "MFU": 0.5, ... },     # any config.py name
     "specs":   { "H100": { "flops": ..., "hbm_bw": ..., ... } },
-    "cluster": [ { "name": "gpu0", "spec": "H100" }, ... ]
+    "cluster": [ { "name": "node0", "spec": "H100", "gpus": 8 }, ... ]
   }
+Returns 400 with a message when the model doesn't fit a node's combined HBM.
 """
 from pathlib import Path
 from types import SimpleNamespace
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -37,14 +38,19 @@ def simulate(body: dict):
         specs[name] = config.GPUSpec(name=name,
                                      **{k: float(v) for k, v in s.items() if k != "name"})
     if body.get("cluster"):
-        cfg_dict["CLUSTER"] = [(g["name"], specs[g["spec"]]) for g in body["cluster"]]
+        cfg_dict["CLUSTER"] = [(g["name"], specs[g["spec"]], int(g.get("gpus", 1)))
+                               for g in body["cluster"]]
 
     cfg = SimpleNamespace(**cfg_dict)
     requests = generate(cfg)
+    try:
+        runs = {policy: run(policy, requests, cfg) for policy in POLICIES}
+    except ValueError as e:      # model doesn't fit / request exceeds KV headroom
+        raise HTTPException(status_code=400, detail=str(e))
     return {"requests": {"count": len(requests),
                          "mean_input": sum(r.input_tokens for r in requests) / len(requests),
                          "mean_output": sum(r.output_tokens for r in requests) / len(requests)},
-            "runs": {policy: run(policy, requests, cfg) for policy in POLICIES}}
+            "runs": runs}
 
 
 # mounted last so /api routes take precedence
