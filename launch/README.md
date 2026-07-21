@@ -9,5 +9,5 @@ This folder contains launch materials for making `inference-sim` public.
 - `announcement-copy.md`: short copy for GitHub, X/LinkedIn, Discord/Slack,
   and the repository description.
 
-This package is intentionally separate from `clean-experiments/blog-draft.md`,
-which is the research idea post for predictive KV warming.
+This package is intentionally separate from the predictive KV warming research
+repo: `https://github.com/shreybirmiwal/bite-the-bullet`.

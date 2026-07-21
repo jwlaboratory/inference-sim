@@ -104,13 +104,13 @@ Suggested opening:
 ## Launch Assets
 
 - Blog 1: predictive warming research post:
-  `clean-experiments/blog-draft.md`.
+  `https://github.com/shreybirmiwal/bite-the-bullet/blob/main/BLOG.md`.
 - Blog 2: simulator launch post:
   `launch/open-source-engine-blog-draft.md`.
 - Results:
-  `clean-experiments/results/SUMMARY.md`.
+  `https://github.com/shreybirmiwal/bite-the-bullet/blob/main/clean-experiments/results/SUMMARY.md`.
 - Cross-system matrix:
-  `clean-experiments/results/standard-systems/SUMMARY.md`.
+  `https://github.com/shreybirmiwal/bite-the-bullet/blob/main/clean-experiments/results/standard-systems/SUMMARY.md`.
 - Suggested launch screenshot:
   UI showing a Gantt chart with cache-aware versus predictive warming.
 - Suggested launch figure:
@@ -121,7 +121,8 @@ Suggested opening:
 1. Finish README and license.
 2. Add tests and CI.
 3. Create a small demo dataset path or fixture.
-4. Re-run clean experiments from a fresh clone.
+4. Re-run the research experiments from fresh `inference-sim` and
+   `bite-the-bullet` clones.
 5. Tag `v0.1.0`.
 6. Publish simulator launch blog.
 7. Publish predictive warming blog.
