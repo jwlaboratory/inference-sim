@@ -91,3 +91,100 @@ In this synthetic workload, the practical policy should probably be:
 The next useful extension is an adaptive controller that chooses warm depth from
 expected burst size, confidence, current queue load, and available background
 compute.
+
+## Adaptive Idle-Only Prefill
+
+We also tested an adaptive policy:
+
+- On a prediction signal, advance all workers to the signal time.
+- Warm only workers with no running or waiting foreground work.
+- Warm as much of the prefix as fits before the predicted burst.
+- If no worker is idle, skip warming.
+- Let normal LRU cache insertion evict stale KV if HBM is full.
+
+In this simulator, a "worker" is a whole tensor-parallel serving node, not an
+individual GPU inside the node.
+
+### Default Cache-Aware, `imbalance_abs=8`
+
+Baseline `cache_aware_no_warm`:
+
+- mean TTFT: 6.61s
+- p95 TTFT: 10.26s
+
+| Policy/cell | Actual P/R | Delta mean TTFT | Delta p95 TTFT | Warm GB | Warm busy |
+|---|---:|---:|---:|---:|---:|
+| adaptive_empty_full | 1.00/1.00 | -3.16s | -1.26s | 429.5 | 93.6s |
+| fixed_32768 | 1.00/1.00 | -1.98s | -2.02s | 343.6 | 74.9s |
+| fixed_65536 | 1.00/1.00 | -2.49s | -0.18s | 687.2 | 149.7s |
+| adaptive_empty_full | 0.50/1.00 | -2.43s | +0.91s | 737.3 | 160.6s |
+| fixed_32768 | 0.50/1.00 | -1.75s | -0.67s | 687.2 | 149.7s |
+| fixed_65536 | 0.50/1.00 | -0.32s | +7.71s | 1374.4 | 299.4s |
+
+Default cache-aware is already close to least-load on this burst, so the p95
+bar is high. Fixed 32k warming remains best for p95 on short-output labeling
+bursts. Adaptive idle-only improves mean TTFT more, but misses enough warming
+opportunities that p95 is worse.
+
+### Stubborn Cache-Aware, `imbalance_abs=512`
+
+Baseline `cache_aware_no_warm`:
+
+- mean TTFT: 10.00s
+- p95 TTFT: 14.49s
+
+| Policy/cell | Actual P/R | Delta mean TTFT | Delta p95 TTFT | Warm GB | Warm busy |
+|---|---:|---:|---:|---:|---:|
+| adaptive_empty_full | 1.00/1.00 | -6.56s | -5.49s | 429.5 | 93.6s |
+| fixed_32768 | 1.00/1.00 | -5.38s | -6.25s | 343.6 | 74.9s |
+| fixed_65536 | 1.00/1.00 | -5.88s | -4.41s | 687.2 | 149.7s |
+| adaptive_empty_full | 0.50/1.00 | -5.83s | -3.32s | 737.3 | 160.6s |
+| fixed_32768 | 0.50/1.00 | -5.14s | -4.89s | 687.2 | 149.7s |
+| fixed_65536 | 0.50/1.00 | -3.72s | +3.48s | 1374.4 | 299.4s |
+
+When cache-aware waits too long, adaptive idle-only is clearly useful. It does
+not beat fixed 32k on p95 in this clean short-output burst, but it does beat
+full-prefix warming and uses less background work than full warming.
+
+### Decode-Heavy Variant
+
+We repeated the default cache-aware run with 256 output tokens/request. In this
+workload, decode backlog dominates TTFT:
+
+- baseline mean TTFT: 432.53s
+- baseline p95 TTFT: 814.11s
+
+| Policy/cell | Actual P/R | Delta mean TTFT | Delta p95 TTFT | Warm GB | Warm busy |
+|---|---:|---:|---:|---:|---:|
+| adaptive_empty_full | 1.00/1.00 | -4.35s | -0.62s | 85.9 | 18.7s |
+| fixed_32768 | 1.00/1.00 | +12.53s | +11.71s | 343.6 | 74.9s |
+| fixed_65536 | 1.00/1.00 | +25.52s | +24.96s | 687.2 | 149.7s |
+| adaptive_empty_full | 0.50/1.00 | -4.35s | -0.62s | 85.9 | 18.7s |
+| fixed_32768 | 0.50/1.00 | +28.61s | +30.01s | 687.2 | 149.7s |
+| fixed_65536 | 0.50/1.00 | +60.55s | +73.73s | 1374.4 | 299.4s |
+
+This is the strongest case for adaptive gating. Fixed background warming can
+make decode-heavy workloads much worse by adding prefill-decode interference.
+The idle-only policy mostly avoids that damage while still getting small wins
+from slack.
+
+### Updated Takeaway
+
+The controller should be adaptive, but "idle means warm full" is still too
+simple. A practical policy probably needs three gates:
+
+1. **Resource gate:** only warm on idle workers or on workers with enough
+   measured prefill slack.
+2. **Depth gate:** choose partial depth from confidence, expected burst size,
+   and cache pressure.
+3. **Objective gate:** optimize mean TTFT, p95 TTFT, or goodput explicitly,
+   because the best action changes across short-output labeling bursts and
+   decode-heavy generation bursts.
+
+So the current best rule of thumb is:
+
+- short-output labeling burst, high recall: fixed or adaptive 25-50% prefix
+  warming is strong;
+- noisy predictor: avoid full-prefix warming;
+- decode-heavy workload: idle-only adaptive gating is much safer than fixed
+  warming.

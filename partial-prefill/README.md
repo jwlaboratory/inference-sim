@@ -28,3 +28,12 @@ The default setup is the synthetic data-labeling spike benchmark:
 - predictor recall fixed at 1.0 while precision is swept
 
 See `RESULTS.md` for the current `abs=64` and `abs=512` sweep readout.
+
+Adaptive idle-only warming:
+
+```bash
+python3 partial-prefill/adaptive_partial_prefill.py
+```
+
+This compares fixed warm depths with an adaptive policy that only spends
+prefill compute on workers that are idle at prediction time.
