@@ -34,7 +34,7 @@ export const SECTIONS = [
     ['MFU', 'MFU', 1, 0.05], ['MBU', 'MBU', 1, 0.05],
   ]],
   ['Router', [
-    ['IMBALANCE_ABS', 'imbalance abs s', 1, 5], ['IMBALANCE_REL', 'imbalance rel', 1, 0.1],
+    ['IMBALANCE_ABS', 'imbalance abs s', 1, 0.5], ['IMBALANCE_REL', 'imbalance rel', 1, 0.1],
   ]],
 ]
 
