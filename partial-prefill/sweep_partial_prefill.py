@@ -78,6 +78,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rdma-gbps", type=float, default=0.0)
     parser.add_argument("--hbm-only", action="store_true", default=True)
     parser.add_argument("--block-tokens", type=int, default=config.BLOCK_TOKENS)
+    parser.add_argument("--model-preset", choices=["default", "glm52-int4"], default="default")
+    parser.add_argument("--num-replicas", type=int)
+    parser.add_argument("--gpus-per-replica", type=int)
+    parser.add_argument("--gpu", choices=["H100", "H200", "B200", "B300", "A100"], default="H100")
     parser.add_argument("--imbalance-abs", type=int, default=512)
     parser.add_argument("--imbalance-rel", type=float, default=config.IMBALANCE_REL)
     parser.add_argument("--max-batch", type=int, default=config.MAX_BATCH)
@@ -113,6 +117,10 @@ def bench_args(args: argparse.Namespace, warm_blocks: int) -> argparse.Namespace
         rdma_gbps=args.rdma_gbps,
         hbm_only=args.hbm_only,
         block_tokens=args.block_tokens,
+        model_preset=args.model_preset,
+        num_replicas=args.num_replicas,
+        gpus_per_replica=args.gpus_per_replica,
+        gpu=args.gpu,
         imbalance_abs=args.imbalance_abs,
         imbalance_rel=args.imbalance_rel,
         max_batch=args.max_batch,

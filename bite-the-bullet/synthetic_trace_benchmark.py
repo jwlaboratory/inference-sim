@@ -23,7 +23,7 @@ import math
 import random
 import statistics
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -92,12 +92,33 @@ def ceil_blocks(tokens: int, block_tokens: int) -> int:
 
 def make_cfg(args: argparse.Namespace) -> SimpleNamespace:
     cfg = synthetic.make_cfg(args.rdma_gbps)
+    apply_model_preset(cfg, args.model_preset)
+    if args.num_replicas is not None or args.gpus_per_replica is not None:
+        replicas = args.num_replicas if args.num_replicas is not None else len(cfg.CLUSTER)
+        gpus = args.gpus_per_replica if args.gpus_per_replica is not None else cfg.CLUSTER[0][2]
+        spec = getattr(config, args.gpu)
+        spec = replace(spec, rdma_bw=args.rdma_gbps * config.GB)
+        cfg.CLUSTER = [(f"node{i}", spec, gpus) for i in range(replicas)]
     cfg.HBM_ONLY = args.hbm_only
     cfg.BLOCK_TOKENS = args.block_tokens
     cfg.IMBALANCE_ABS = args.imbalance_abs
     cfg.IMBALANCE_REL = args.imbalance_rel
     cfg.MAX_BATCH = args.max_batch
     return cfg
+
+
+def apply_model_preset(cfg: SimpleNamespace, preset: str) -> None:
+    if preset == "default":
+        return
+    if preset == "glm52-int4":
+        cfg.PARAMS = 744e9
+        cfg.ACTIVE_PARAMS = 40e9
+        cfg.DTYPE_BYTES = 0.5
+        cfg.LAYERS = 78
+        cfg.KV_HEADS = 1
+        cfg.HEAD_DIM = 288
+        return
+    raise ValueError(f"unknown model preset: {preset}")
 
 
 def make_blocks(prefix: str, count: int) -> tuple[str, ...]:
@@ -687,6 +708,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rdma-gbps", type=float, default=0.0)
     parser.add_argument("--hbm-only", action="store_true", default=True)
     parser.add_argument("--block-tokens", type=int, default=config.BLOCK_TOKENS)
+    parser.add_argument("--model-preset", choices=["default", "glm52-int4"], default="default")
+    parser.add_argument("--num-replicas", type=int)
+    parser.add_argument("--gpus-per-replica", type=int)
+    parser.add_argument("--gpu", choices=["H100", "H200", "B200", "B300", "A100"], default="H100")
     parser.add_argument("--imbalance-abs", type=int, default=64)
     parser.add_argument("--imbalance-rel", type=float, default=config.IMBALANCE_REL)
     parser.add_argument("--max-batch", type=int, default=config.MAX_BATCH)

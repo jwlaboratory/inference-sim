@@ -1,8 +1,8 @@
 # Clean Experiments
 
-Status: **drafted, not run**.
+Status: **run on the simulator**. See `results/SUMMARY.md`.
 
-These are the three clean experiments to check before running. They are based on
+These are the three clean experiments. They are based on
 what we learned from the exploratory `bite-the-bullet/` and `partial-prefill/`
 work, but they are written as fresh paper-grade experiments with every setting
 spelled out.
@@ -55,22 +55,23 @@ Use a GLM-5.2-like MoE model shape.
   setup therefore requires quantized weights, or else the replica shape must be
   larger.
 
-### Simulator Proxy
+### Simulator Run Setup
 
-The current simulator does not yet decouple weight dtype from KV dtype. Until
-that is added, use this proxy model for simulator runs:
+The simulator now accepts the same GLM-like shape through
+`--model-preset glm52-int4`. One caveat: it still uses one `DTYPE_BYTES` value
+for both weights and KV, so this is an int4-weight/int4-KV stress proxy rather
+than a fully faithful int4-weight/fp8-KV system.
 
-- `PARAMS = 70.6e9`
-- `ACTIVE_PARAMS = 70.6e9`
-- `LAYERS = 80`
-- `KV_HEADS = 8`
-- `HEAD_DIM = 128`
-- `DTYPE_BYTES = 2`
-- `CLUSTER = 4 replicas x 4 H100`
-
-Reason: this proxy is what the current scripts already model correctly. The
-real-system writeup should report GLM-5.2-like settings; the simulator should
-be treated as a mechanism-validation proxy until we add model-preset overrides.
+- `--model-preset glm52-int4`
+- `PARAMS = 744e9`
+- `ACTIVE_PARAMS = 40e9`
+- `LAYERS = 78`
+- `KV_HEADS = 1`
+- `HEAD_DIM = 288`
+- `DTYPE_BYTES = 0.5`
+- `--num-replicas 8`
+- `--gpus-per-replica 8`
+- `--gpu H100`
 
 ### Router And Cache
 
@@ -123,4 +124,3 @@ under:
 ```text
 clean-experiments/results/
 ```
-

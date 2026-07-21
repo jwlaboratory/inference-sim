@@ -1,6 +1,9 @@
 # Experiment 3: Boundary And Safety
 
-Status: **drafted, not run**.
+Status: **run on the simulator**. See
+`results/experiment_03a_decode_heavy.json`,
+`results/experiment_03b_mooncake_no_rdma.json`,
+`results/experiment_03c_mooncake_rdma.json`, and `results/SUMMARY.md`.
 
 ## Question
 
@@ -34,9 +37,12 @@ positive on decode-heavy and trace replay.
 
 ## Simulator Proxy Setup
 
-- Model: current simulator default Llama-70B proxy.
-- Cluster: current simulator default 4 replicas x 4 H100.
+- Model preset: `glm52-int4`.
+- Model shape: 744B total params, 40B active params/token, 78 layers,
+  compressed KV proxy `KV_HEADS=1`, `HEAD_DIM=288`, `DTYPE_BYTES=0.5`.
+- Cluster: 8 replicas x 8 H100.
 - Cache-aware threshold: `abs=8`, `rel=1.5`.
+- Max batch: 256.
 
 ## Workload A: Decode-Heavy Fanout
 
@@ -121,6 +127,12 @@ Decode-heavy adaptive run:
 ```bash
 python3 partial-prefill/adaptive_partial_prefill.py \
   --imbalance-abs 8 \
+  --model-preset glm52-int4 \
+  --num-replicas 8 \
+  --gpus-per-replica 8 \
+  --gpu H100 \
+  --max-batch 256 \
+  --block-tokens 256 \
   --num-bursts 8 \
   --burst-size 500 \
   --prefix-tokens 65536 \
@@ -146,10 +158,15 @@ python3 bite-the-bullet/evaluate_art_warming.py \
   --dataset valeriol29/mooncake-traces \
   --config-name mooncake \
   --block-tokens 512 \
+  --model-preset glm52-int4 \
+  --num-replicas 8 \
+  --gpus-per-replica 8 \
+  --gpu H100 \
   --key-blocks 8 \
   --windows 12 \
   --rows-per-window 1500 \
   --max-parquet-files 1 \
+  --max-batch 256 \
   --warm-blocks 8 \
   --thresholds 0.8 \
   --rdma-gbps 0 \
@@ -168,10 +185,15 @@ python3 bite-the-bullet/evaluate_art_warming.py \
   --dataset valeriol29/mooncake-traces \
   --config-name mooncake \
   --block-tokens 512 \
+  --model-preset glm52-int4 \
+  --num-replicas 8 \
+  --gpus-per-replica 8 \
+  --gpu H100 \
   --key-blocks 8 \
   --windows 12 \
   --rows-per-window 1500 \
   --max-parquet-files 1 \
+  --max-batch 256 \
   --warm-blocks 8 \
   --thresholds 0.8 \
   --rdma-gbps 50 \
@@ -181,4 +203,3 @@ python3 bite-the-bullet/evaluate_art_warming.py \
   --imbalance-abs 8 \
   --out clean-experiments/results/experiment_03c_mooncake_rdma.json
 ```
-

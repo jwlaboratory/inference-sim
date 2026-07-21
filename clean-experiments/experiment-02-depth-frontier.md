@@ -1,6 +1,7 @@
 # Experiment 2: Predictor And Depth Frontier
 
-Status: **drafted, not run**.
+Status: **run on the simulator**. See
+`results/experiment_02_depth_frontier.json` and `results/SUMMARY.md`.
 
 ## Question
 
@@ -32,11 +33,14 @@ precision is very high; at moderate precision it should hurt p95.
 
 ## Simulator Proxy Setup
 
-- Model: current simulator default Llama-70B proxy.
-- Cluster: current simulator default 4 replicas x 4 H100.
+- Model preset: `glm52-int4`.
+- Model shape: 744B total params, 40B active params/token, 78 layers,
+  compressed KV proxy `KV_HEADS=1`, `HEAD_DIM=288`, `DTYPE_BYTES=0.5`.
+- Cluster: 8 replicas x 8 H100.
 - RDMA: `0`.
 - HBM-only: `true`.
 - Cache-aware threshold: `abs=8`, `rel=1.5`.
+- Max batch: 256.
 
 ## Workload
 
@@ -111,6 +115,12 @@ This experiment supports the mechanism claim if:
 ```bash
 python3 partial-prefill/sweep_partial_prefill.py \
   --imbalance-abs 8 \
+  --model-preset glm52-int4 \
+  --num-replicas 8 \
+  --gpus-per-replica 8 \
+  --gpu H100 \
+  --max-batch 256 \
+  --block-tokens 256 \
   --num-bursts 8 \
   --burst-size 500 \
   --prefix-tokens 65536 \
@@ -129,4 +139,3 @@ python3 partial-prefill/sweep_partial_prefill.py \
   --warm-tokens 2048 4096 8192 16384 32768 65536 \
   --out clean-experiments/results/experiment_02_depth_frontier.json
 ```
-

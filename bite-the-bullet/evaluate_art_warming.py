@@ -26,7 +26,7 @@ import random
 import statistics
 import sys
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -104,12 +104,39 @@ def make_cfg(
     arrival_scale: float,
     hbm_only: bool,
     block_tokens: int,
+    max_batch: int,
+    model_preset: str = "default",
+    num_replicas: int | None = None,
+    gpus_per_replica: int | None = None,
+    gpu: str = "H100",
 ) -> SimpleNamespace:
     cfg = synthetic.make_cfg(rdma_gbps_per_gpu)
+    apply_model_preset(cfg, model_preset)
+    if num_replicas is not None or gpus_per_replica is not None:
+        replicas = num_replicas if num_replicas is not None else len(cfg.CLUSTER)
+        gpus = gpus_per_replica if gpus_per_replica is not None else cfg.CLUSTER[0][2]
+        spec = getattr(config, gpu)
+        spec = replace(spec, rdma_bw=rdma_gbps_per_gpu * config.GB)
+        cfg.CLUSTER = [(f"node{i}", spec, gpus) for i in range(replicas)]
     cfg.ARRIVAL_SCALE = arrival_scale
     cfg.HBM_ONLY = hbm_only
     cfg.BLOCK_TOKENS = block_tokens
+    cfg.MAX_BATCH = max_batch
     return cfg
+
+
+def apply_model_preset(cfg: SimpleNamespace, preset: str) -> None:
+    if preset == "default":
+        return
+    if preset == "glm52-int4":
+        cfg.PARAMS = 744e9
+        cfg.ACTIVE_PARAMS = 40e9
+        cfg.DTYPE_BYTES = 0.5
+        cfg.LAYERS = 78
+        cfg.KV_HEADS = 1
+        cfg.HEAD_DIM = 288
+        return
+    raise ValueError(f"unknown model preset: {preset}")
 
 
 def scaled_obs(obs: list, scale: float) -> list:
@@ -780,6 +807,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hbm-only", action="store_true")
     parser.add_argument("--key-blocks", type=int, default=8)
     parser.add_argument("--block-tokens", type=int, default=config.BLOCK_TOKENS)
+    parser.add_argument("--max-batch", type=int, default=config.MAX_BATCH)
+    parser.add_argument("--model-preset", choices=["default", "glm52-int4"], default="default")
+    parser.add_argument("--num-replicas", type=int)
+    parser.add_argument("--gpus-per-replica", type=int)
+    parser.add_argument("--gpu", choices=["H100", "H200", "B200", "B300", "A100"], default="H100")
     parser.add_argument("--horizon-s", type=float, default=30.0)
     parser.add_argument("--future-k", type=int, default=3)
     parser.add_argument("--thresholds", type=float, nargs="*")
@@ -799,7 +831,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     model = load_model(Path(args.model))
-    cfg = make_cfg(args.rdma_gbps, args.arrival_scale, args.hbm_only, args.block_tokens)
+    cfg = make_cfg(
+        args.rdma_gbps,
+        args.arrival_scale,
+        args.hbm_only,
+        args.block_tokens,
+        args.max_batch,
+        args.model_preset,
+        args.num_replicas,
+        args.gpus_per_replica,
+        args.gpu,
+    )
     if args.imbalance_abs is not None:
         cfg.IMBALANCE_ABS = args.imbalance_abs
     if args.imbalance_rel is not None:
