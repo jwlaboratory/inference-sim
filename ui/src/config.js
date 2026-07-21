@@ -19,6 +19,26 @@ export const DEFAULT_CONFIG = {
   ],
 }
 
+/* Architecture specs from each model's Hugging Face config.json (fp16/bf16
+   weights). head_dim = hidden_size / num_attention_heads unless the config
+   sets it explicitly. Selecting a preset fills the Model fields below. */
+export const MODEL_PRESETS = [
+  { name: 'Llama 3.2 1B',        PARAMS: 1.24e9, LAYERS: 16, KV_HEADS: 8,  HEAD_DIM: 64,  DTYPE_BYTES: 2 },
+  { name: 'Llama 3.2 3B',        PARAMS: 3.21e9, LAYERS: 28, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Llama 3.1 8B',        PARAMS: 8.03e9, LAYERS: 32, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Llama 3.3 70B',       PARAMS: 70.6e9, LAYERS: 80, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Mistral 7B',          PARAMS: 7.25e9, LAYERS: 32, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Mistral Small 24B',   PARAMS: 23.6e9, LAYERS: 40, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Qwen2.5 7B',          PARAMS: 7.62e9, LAYERS: 28, KV_HEADS: 4,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Qwen2.5 72B',         PARAMS: 72.7e9, LAYERS: 80, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Qwen3 8B',            PARAMS: 8.19e9, LAYERS: 36, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Qwen3 32B',           PARAMS: 32.8e9, LAYERS: 64, KV_HEADS: 8,  HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Gemma 2 9B',          PARAMS: 9.24e9, LAYERS: 42, KV_HEADS: 8,  HEAD_DIM: 256, DTYPE_BYTES: 2 },
+  { name: 'Gemma 2 27B',         PARAMS: 27.2e9, LAYERS: 46, KV_HEADS: 16, HEAD_DIM: 128, DTYPE_BYTES: 2 },
+  { name: 'Phi-4 14B',           PARAMS: 14.7e9, LAYERS: 40, KV_HEADS: 10, HEAD_DIM: 128, DTYPE_BYTES: 2 },
+]
+export const PRESET_KEYS = ['PARAMS', 'LAYERS', 'KV_HEADS', 'HEAD_DIM', 'DTYPE_BYTES']
+
 /* Field schema: [config key, label, scale, step]. Shown value = raw / scale. */
 export const SECTIONS = [
   ['Trace replay', [

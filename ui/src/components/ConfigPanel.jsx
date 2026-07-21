@@ -1,4 +1,32 @@
-import { SECTIONS, SPEC_FIELDS } from '../config.js'
+import { SECTIONS, SPEC_FIELDS, MODEL_PRESETS, PRESET_KEYS } from '../config.js'
+
+function ModelPreset({ cfg, setCfg }) {
+  const current = MODEL_PRESETS.find((p) => PRESET_KEYS.every((k) => cfg.config[k] === p[k]))
+  const apply = (name) => {
+    const p = MODEL_PRESETS.find((m) => m.name === name)
+    if (!p) return
+    const patch = Object.fromEntries(PRESET_KEYS.map((k) => [k, p[k]]))
+    setCfg({ ...cfg, config: { ...cfg.config, ...patch } })
+  }
+  const weightGB = cfg.config.PARAMS * cfg.config.DTYPE_BYTES / 1e9
+  const minHbm = Math.min(...cfg.cluster.map((c) => cfg.specs[c.spec]?.hbm_cap ?? Infinity)) / 1e9
+  return (
+    <>
+      <div className="field">
+        <label>preset</label>
+        <select style={{ width: 150 }} value={current?.name ?? 'custom'}
+                onChange={(e) => apply(e.target.value)}>
+          {!current && <option value="custom">custom</option>}
+          {MODEL_PRESETS.map((p) => <option key={p.name}>{p.name}</option>)}
+        </select>
+      </div>
+      <div className="sub" style={{ margin: '2px 0 6px' }}>
+        weights {weightGB.toFixed(0)} GB fp16
+        {weightGB > minHbm && ` — exceeds smallest GPU's ${minHbm.toFixed(0)} GB HBM`}
+      </div>
+    </>
+  )
+}
 
 function Field({ label, value, scale, step, onChange }) {
   return (
@@ -36,6 +64,7 @@ export default function ConfigPanel({ cfg, setCfg, onRun, stale, running }) {
       {SECTIONS.map(([title, fields]) => (
         <div className="sect" key={title}>
           <div className="hd">{title}</div>
+          {title === 'Model' && <ModelPreset cfg={cfg} setCfg={setCfg} />}
           {fields.map(([k, label, scale, step]) => (
             <Field key={k} label={label} value={cfg.config[k]} scale={scale} step={step}
                    onChange={(v) => set(k, v)} />
