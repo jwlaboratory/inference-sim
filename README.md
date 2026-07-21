@@ -1,4 +1,67 @@
 # inference-sim
-# inference-sim
-# inference-sim
-# inference-sim
+
+A small, composable simulator for LLM inference clusters. It replays a
+window of a real production trace, routes each request to a GPU with a
+pluggable policy, and models prefill/decode/prefix-cache timing from first
+principles. A React UI visualizes the run and lets you edit every tunable.
+
+## Quickstart
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python server.py          # serves the UI + API on :8000
+```
+
+Open http://localhost:8000. CLI instead: `python3 simulate.py` compares all
+routing policies on the same trace window.
+
+UI development: `cd ui && npm install && npm run dev` (Vite on :5173,
+proxies /api to :8000). `npm run build` refreshes what server.py serves.
+
+## How it works
+
+```
+config.py     every tunable, grouped by consumer; defaults for everything
+workload.py   fetches a window of the HF trace -> list[Request]
+router.py     cache_aware | least_load | round_robin | random (SGLang-style)
+gpu.py        GPUSpec + timing equations + block-granular KV prefix cache
+simulate.py   the event loop: route -> reuse/load/recompute prefix -> prefill -> decode
+server.py     FastAPI: serves ui/dist and POST /api/simulate
+ui/           React (Vite) frontend: config editor, metrics, Gantt playback
+```
+
+**Workload.** Requests come from a Mooncake-format trace
+([ART-Chat-2.5M](https://huggingface.co/datasets/alessiotoniolo/ART-Chat-2.5M)):
+each row has real arrival timestamps, input/output token counts, and
+`hash_ids` — hashes of consecutive 256-token prompt blocks. A random point
+in the 2.5M-request trace is chosen (reproducible via `SEED`, or pin
+`DATASET_OFFSET`) and `NUM_REQUESTS` consecutive requests are replayed,
+with arrival gaps scaled by `ARRIVAL_SCALE`. Rows stream from the HF
+datasets-server API; nothing is downloaded up front.
+
+**Prefix caching.** Two requests share a prefix exactly when their leading
+block hashes match, so caches operate on the recorded hashes directly. Each
+GPU keeps hot blocks in HBM (LRU), evicting to host RAM; every computed
+block is also persisted to disk when `DISK_CACHE` is on. For each request
+the simulator finds the longest cached run of its leading blocks across
+local HBM (free), local RAM (PCIe), a peer GPU (RDMA), or disk — and uses
+it only if loading beats recomputing.
+
+**Timing model** (per GPU, one request at a time — no continuous batching):
+
+- prefill: `2 * params * tokens / (flops * MFU)` (compute-bound)
+- decode: `out_tokens * (weight_bytes + context_kv_bytes) / (hbm_bw * MBU)` (memory-bound)
+- cache load: `blocks * block_kv_bytes / tier_bandwidth`
+
+**Routing.** `cache_aware` routes to the longest prefix match and falls
+back to least-load when the cluster is imbalanced (SGLang's
+`balance_abs/rel_threshold` scheme).
+
+## Configuring
+
+Everything lives in `config.py` (the CLI reads it directly; the UI posts
+overrides per run): trace window and arrival scaling, served model shape
+(`PARAMS`, `LAYERS`, `KV_HEADS`, `HEAD_DIM`, `MFU`, `MBU`), router
+thresholds, and the cluster — a list of named GPUs, each with a `GPUSpec`
+(FLOPs, HBM bandwidth/capacity, PCIe, RDMA, disk). Add GPUs or new specs in
+one line each; the UI can also edit all of this live.
