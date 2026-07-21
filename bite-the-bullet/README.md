@@ -77,3 +77,5 @@ python3 bite-the-bullet/evaluate_art_warming.py \
   --dataset valeriol29/mooncake-traces --config-name mooncake \
   --block-tokens 512 --key-blocks 8 --rdma-gbps 0 --hbm-only --include-real-seed
 ```
+
+See `RESULTS.md` for the Mooncake HBM-only cache-aware threshold sweep.

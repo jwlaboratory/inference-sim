@@ -358,6 +358,10 @@ def choose_cache_aware(req: Request, nodes: list, now: float, cfg: SimpleNamespa
     return min(nodes, key=lambda node: (-synthetic.local_blocks(node, req.blocks), node_load(node, now)))
 
 
+def choose_pure_affinity(req: Request, nodes: list, now: float):
+    return min(nodes, key=lambda node: (-synthetic.local_blocks(node, req.blocks), node_load(node, now)))
+
+
 def choose_node(
     policy: PolicySpec,
     req: Request,
@@ -372,6 +376,9 @@ def choose_node(
 
     if policy.route == "cache_aware":
         return choose_cache_aware(req, nodes, now, cfg)
+
+    if policy.route == "pure_affinity":
+        return choose_pure_affinity(req, nodes, now)
 
     if policy.route == "predictive":
         key = prefix_key(req, key_blocks)
@@ -634,6 +641,7 @@ def summarize(policy: PolicySpec, cfg: SimpleNamespace, nodes: list, events: lis
 
 def policy_specs(args: argparse.Namespace, model: dict) -> list[PolicySpec]:
     specs = [
+        PolicySpec("pure_cache_affinity", "pure_affinity", allow_remote_on_admit=False),
         PolicySpec("cache_aware_no_remote", "cache_aware", allow_remote_on_admit=False),
         PolicySpec("least_load_no_remote", "least_load", allow_remote_on_admit=False),
     ]
@@ -779,6 +787,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warm-blocks", type=int, nargs="+", default=[8, 32])
     parser.add_argument("--replicas", type=int, default=4)
     parser.add_argument("--active-ttl-s", type=float, default=30.0)
+    parser.add_argument("--imbalance-abs", type=int)
+    parser.add_argument("--imbalance-rel", type=float)
     parser.add_argument("--include-fake-prefill", action="store_true")
     parser.add_argument("--include-real-seed", action="store_true")
     parser.add_argument("--baseline", default="reactive_copy_rdma")
@@ -790,6 +800,10 @@ def main() -> None:
     args = parse_args()
     model = load_model(Path(args.model))
     cfg = make_cfg(args.rdma_gbps, args.arrival_scale, args.hbm_only, args.block_tokens)
+    if args.imbalance_abs is not None:
+        cfg.IMBALANCE_ABS = args.imbalance_abs
+    if args.imbalance_rel is not None:
+        cfg.IMBALANCE_REL = args.imbalance_rel
     baseline = args.baseline if args.rdma_gbps > 0 else "least_load_no_remote"
     specs = policy_specs(args, model)
     if baseline not in {spec.name for spec in specs}:
