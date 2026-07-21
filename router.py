@@ -15,6 +15,14 @@ def load(node, now):
     return len(node.running) + len(node.waiting)
 
 
+def pick(nodes, key):
+    """Node minimizing key, ties broken randomly — with batching, loads (and
+    prefix matches) are small ints that tie constantly, and min()'s
+    first-element bias would pile every tie onto node0."""
+    best = min(key(nd) for nd in nodes)
+    return random.choice([nd for nd in nodes if key(nd) == best])
+
+
 class Random:
     def __init__(self, cfg=None):
         pass
@@ -37,7 +45,7 @@ class LeastLoad:
         pass
 
     def route(self, req, nodes, now):
-        return min(nodes, key=lambda nd: load(nd, now))
+        return pick(nodes, lambda nd: load(nd, now))
 
 
 class CacheAware:
@@ -48,9 +56,9 @@ class CacheAware:
         loads = [load(nd, now) for nd in nodes]
         if max(loads) > self.cfg.IMBALANCE_ABS \
                 and max(loads) > self.cfg.IMBALANCE_REL * min(loads):
-            return min(nodes, key=lambda nd: load(nd, now))
-        # longest prefix-block match, ties broken by lightest load
-        return max(nodes, key=lambda nd: (sum(nd.match(req.blocks)), -load(nd, now)))
+            return pick(nodes, lambda nd: load(nd, now))
+        # longest prefix-block match, then lightest load, then random
+        return pick(nodes, lambda nd: (-sum(nd.match(req.blocks)), load(nd, now)))
 
 
 POLICIES = {"cache_aware": CacheAware, "least_load": LeastLoad,

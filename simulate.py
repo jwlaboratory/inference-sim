@@ -152,6 +152,7 @@ def run(policy, requests, cfg=None):
     out_tok = sum(e["output_tokens"] for e in events)
     lat = sorted(e["finish"] - e["arrival"] for e in events)
     ttft = [e["start"] - e["arrival"] + e["reuse"] + e["prefill"] for e in events]
+    peak_queue = max(e["start"] - e["arrival"] for e in events)
     span = max(e["finish"] for e in events)
     return {"span": span,
             "nodes": [{"name": nd.name, "spec": nd.spec.name, "gpus": nd.n_gpus,
@@ -159,8 +160,14 @@ def run(policy, requests, cfg=None):
                        "kv_budget": nd.kv_budget} for nd in nodes],
             "events": events,
             "metrics": {"mean_lat": sum(lat) / len(lat),
+                        "p50_lat": lat[len(lat) // 2],
                         "p95_lat": lat[int(0.95 * len(lat))],
+                        "max_lat": lat[-1],
                         "mean_ttft": sum(ttft) / len(ttft),
+                        "peak_queue": peak_queue,
+                        "mean_queue": sum(e["start"] - e["arrival"] for e in events) / len(events),
+                        "mean_prefill": sum(e["reuse"] + e["prefill"] for e in events) / len(events),
+                        "mean_decode": sum(e["decode"] for e in events) / len(events),
                         "throughput": out_tok / span,
                         "cache_hit": hit_tok / prefix_tok if prefix_tok else 0,
                         "hbm_hit": hbm_tok / prefix_tok if prefix_tok else 0,
@@ -173,9 +180,9 @@ if __name__ == "__main__":
     print(f"{len(requests)} requests on {len(cfg.CLUSTER)} nodes "
           f"({', '.join(f'{n}×{s.name}' for _, s, n in cfg.CLUSTER)})\n")
     print(f"{'policy':<12} {'mean_lat':>9} {'p95_lat':>9} {'mean_ttft':>10} "
-          f"{'tok/s':>8} {'cache_hit':>10} {'hbm_hit':>8} {'util':>6}")
+          f"{'peak_q':>8} {'tok/s':>8} {'cache_hit':>10} {'hbm_hit':>8} {'util':>6}")
     for policy in POLICIES:
         m = run(policy, requests, cfg)["metrics"]
         print(f"{policy:<12} {m['mean_lat']:>8.1f}s {m['p95_lat']:>8.1f}s "
-              f"{m['mean_ttft']:>9.1f}s {m['throughput']:>8.0f} "
+              f"{m['mean_ttft']:>9.1f}s {m['peak_queue']:>7.1f}s {m['throughput']:>8.0f} "
               f"{m['cache_hit']:>9.0%} {m['hbm_hit']:>7.0%} {m['util']:>6.0%}")
