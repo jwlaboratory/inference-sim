@@ -10,9 +10,17 @@ export const DEFAULT_CONFIG = {
     MFU: 0.5, MBU: 0.8,
     IMBALANCE_ABS: 2, IMBALANCE_REL: 1.5, DISK_CACHE: true,
   },
+  /* flops = peak dense BF16 (no sparsity), matching the H100 989 TF convention.
+     ram_bw ≈ realistic PCIe gen for the part; rdma_bw ≈ per-GPU NIC (400G = 50 GB/s,
+     800G = 100 GB/s). */
   specs: {
-    H100: { flops: 989e12, hbm_bw: 3.35e12, hbm_cap: 80e9, ram_bw: 55e9, rdma_bw: 50e9, disk_bw: 7e9 },
-    A100: { flops: 312e12, hbm_bw: 2.00e12, hbm_cap: 80e9, ram_bw: 25e9, rdma_bw: 25e9, disk_bw: 5e9 },
+    H100:   { flops: 989e12,  hbm_bw: 3.35e12, hbm_cap: 80e9,  ram_bw: 55e9,  rdma_bw: 50e9,  disk_bw: 7e9 },
+    A100:   { flops: 312e12,  hbm_bw: 2.00e12, hbm_cap: 80e9,  ram_bw: 25e9,  rdma_bw: 25e9,  disk_bw: 5e9 },
+    H200:   { flops: 989e12,  hbm_bw: 4.80e12, hbm_cap: 141e9, ram_bw: 55e9,  rdma_bw: 50e9,  disk_bw: 7e9 },
+    B200:   { flops: 2250e12, hbm_bw: 8.00e12, hbm_cap: 192e9, ram_bw: 60e9,  rdma_bw: 100e9, disk_bw: 7e9 },
+    B300:   { flops: 2250e12, hbm_bw: 8.00e12, hbm_cap: 288e9, ram_bw: 120e9, rdma_bw: 100e9, disk_bw: 7e9 },
+    MI300X: { flops: 1307e12, hbm_bw: 5.30e12, hbm_cap: 192e9, ram_bw: 55e9,  rdma_bw: 50e9,  disk_bw: 7e9 },
+    MI355X: { flops: 2500e12, hbm_bw: 8.00e12, hbm_cap: 288e9, ram_bw: 120e9, rdma_bw: 100e9, disk_bw: 7e9 },
   },
   cluster: [
     { name: 'gpu0', spec: 'H100' }, { name: 'gpu1', spec: 'H100' },

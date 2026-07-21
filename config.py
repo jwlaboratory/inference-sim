@@ -42,8 +42,15 @@ class GPUSpec:
     disk_bw: float   # local NVMe read
 
 
-H100 = GPUSpec("H100", 989e12, 3.35e12, 80 * GB, 55e9, 50e9, 7e9)
+# flops = peak dense BF16 (no sparsity). ram_bw ~ realistic PCIe for the part;
+# rdma_bw ~ per-GPU NIC (400G = 50 GB/s, 800G = 100 GB/s).
 A100 = GPUSpec("A100", 312e12, 2.00e12, 80 * GB, 25e9, 25e9, 5e9)
+H100 = GPUSpec("H100", 989e12, 3.35e12, 80 * GB, 55e9, 50e9, 7e9)
+H200 = GPUSpec("H200", 989e12, 4.80e12, 141 * GB, 55e9, 50e9, 7e9)
+B200 = GPUSpec("B200", 2250e12, 8.00e12, 192 * GB, 60e9, 100e9, 7e9)
+B300 = GPUSpec("B300", 2250e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
+MI300X = GPUSpec("MI300X", 1307e12, 5.30e12, 192 * GB, 55e9, 50e9, 7e9)
+MI355X = GPUSpec("MI355X", 2500e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
 
 # ------------------------------------------------------------------ router.py
 # cache-aware falls back to least-load when both thresholds are exceeded
