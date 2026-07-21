@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { DEFAULT_CONFIG, POLICY_NAMES, TIERS, TIER_COLOR, fmtT } from './config.js'
+import { DEFAULT_CONFIG, POLICY_NAMES, TIERS, TIER_COLOR, TIER_DESC, QUEUE_DESC, fmtT } from './config.js'
 import ConfigPanel from './components/ConfigPanel.jsx'
 import Gantt from './components/Gantt.jsx'
 import GpuCards from './components/GpuCards.jsx'
@@ -82,10 +82,11 @@ export default function App() {
           <div className="legend">
             <span style={{ color: 'var(--muted)' }}>prefix served from:</span>
             {TIERS.map((tier) => (
-              <span key={tier}><span className="chip" style={{ background: TIER_COLOR[tier] }} />
+              <span key={tier} className="legend-item" title={TIER_DESC[tier]}>
+                <span className="chip" style={{ background: TIER_COLOR[tier] }} />
                 {tier} ({tierCount[tier]})</span>
             ))}
-            <span><span className="chip"
+            <span className="legend-item" title={QUEUE_DESC}><span className="chip"
               style={{ background: 'color-mix(in srgb, var(--ink) 50%, transparent)' }} />
               queue depth (strip under each lane)</span>
             <span style={{ color: 'var(--muted)' }}>
