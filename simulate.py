@@ -45,7 +45,7 @@ def run(policy, requests, cfg=None):
     gpus = [GPU(name, spec, cfg) for name, spec in cfg.CLUSTER]
     router = POLICIES[policy](cfg)
     disk = set()
-    events, hit_tok, prefix_tok = [], 0, 0
+    events, hit_tok, hbm_tok, prefix_tok = [], 0, 0, 0
 
     for r in requests:
         gpu = router.route(r, gpus, r.arrival)
@@ -65,6 +65,7 @@ def run(policy, requests, cfg=None):
             disk.update(r.cache_blocks)
 
         hit_tok += hit
+        hbm_tok += hit if tier == "hbm" else 0
         prefix_tok += r.prefix_tokens
         events.append({"id": r.id, "arrival": r.arrival, "group": r.group,
                        "prefix_tokens": r.prefix_tokens,
@@ -83,6 +84,7 @@ def run(policy, requests, cfg=None):
                         "p95_lat": lat[int(0.95 * len(lat))],
                         "mean_ttft": sum(ttft) / len(ttft),
                         "cache_hit": hit_tok / prefix_tok if prefix_tok else 0,
+                        "hbm_hit": hbm_tok / prefix_tok if prefix_tok else 0,
                         "util": sum(g.busy for g in gpus) / (len(gpus) * span)}}
 
 
@@ -92,8 +94,9 @@ if __name__ == "__main__":
     print(f"{len(requests)} requests on {len(cfg.CLUSTER)} GPUs "
           f"({', '.join(s.name for _, s in cfg.CLUSTER)})\n")
     print(f"{'policy':<12} {'mean_lat':>9} {'p95_lat':>9} {'mean_ttft':>10} "
-          f"{'cache_hit':>10} {'util':>6}")
+          f"{'cache_hit':>10} {'hbm_hit':>8} {'util':>6}")
     for policy in POLICIES:
         m = run(policy, requests, cfg)["metrics"]
         print(f"{policy:<12} {m['mean_lat']:>8.1f}s {m['p95_lat']:>8.1f}s "
-              f"{m['mean_ttft']:>9.1f}s {m['cache_hit']:>9.0%} {m['util']:>6.0%}")
+              f"{m['mean_ttft']:>9.1f}s {m['cache_hit']:>9.0%} "
+              f"{m['hbm_hit']:>7.0%} {m['util']:>6.0%}")

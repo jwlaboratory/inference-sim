@@ -46,7 +46,9 @@ A100 = GPUSpec("A100", 312e12, 2.00e12, 80 * GB, 25e9, 25e9, 5e9)
 
 # ------------------------------------------------------------------ router.py
 # cache-aware falls back to least-load when both thresholds are exceeded
-IMBALANCE_ABS = 15.0   # seconds of queued work
+# (keep ABS in the ballpark of one request's service time, or affinity
+# will queue behind busy GPUs to save a cheap prefix load)
+IMBALANCE_ABS = 2.0    # seconds of queued work
 IMBALANCE_REL = 1.5    # max_load > REL * min_load
 
 # ---------------------------------------------------------------- simulate.py

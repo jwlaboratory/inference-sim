@@ -93,7 +93,8 @@ export default function App() {
 
         <div className="tiles">
           {[['mean latency', fmtT(m.mean_lat)], ['p95 latency', fmtT(m.p95_lat)],
-            ['mean TTFT', fmtT(m.mean_ttft)], ['prefix cache hit', `${Math.round(m.cache_hit * 100)}%`],
+            ['mean TTFT', fmtT(m.mean_ttft)], ['prefix reuse (any tier)', `${Math.round(m.cache_hit * 100)}%`],
+            ['from local HBM', `${Math.round(m.hbm_hit * 100)}%`],
             ['GPU utilization', `${Math.round(m.util * 100)}%`]].map(([k, v]) => (
             <div className="card tile" key={k}><div className="v">{v}</div><div className="k">{k} · {policy}</div></div>
           ))}
@@ -125,7 +126,7 @@ export default function App() {
           <div className="hd">Policy comparison — same trace</div>
           <table>
             <thead><tr><th>policy</th><th>mean lat</th><th>p95 lat</th><th>mean TTFT</th>
-              <th>cache hit</th><th>util</th></tr></thead>
+              <th>reuse</th><th>hbm hit</th><th>util</th></tr></thead>
             <tbody>
               {POLICY_NAMES.map((p) => {
                 const mm = result.runs[p].metrics
@@ -134,6 +135,7 @@ export default function App() {
                       onClick={() => { setPolicy(p); setT(0); setPlaying(false) }}>
                     <td>{p}</td><td>{fmtT(mm.mean_lat)}</td><td>{fmtT(mm.p95_lat)}</td>
                     <td>{fmtT(mm.mean_ttft)}</td><td>{Math.round(mm.cache_hit * 100)}%</td>
+                    <td>{Math.round(mm.hbm_hit * 100)}%</td>
                     <td>{Math.round(mm.util * 100)}%</td>
                   </tr>
                 )

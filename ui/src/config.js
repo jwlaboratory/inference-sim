@@ -7,7 +7,7 @@ export const DEFAULT_CONFIG = {
     DATASET_OFFSET: -1, ARRIVAL_SCALE: 4, BLOCK_TOKENS: 256,
     PARAMS: 8e9, DTYPE_BYTES: 2, LAYERS: 32, KV_HEADS: 8, HEAD_DIM: 128,
     MFU: 0.5, MBU: 0.8,
-    IMBALANCE_ABS: 15, IMBALANCE_REL: 1.5, DISK_CACHE: true,
+    IMBALANCE_ABS: 2, IMBALANCE_REL: 1.5, DISK_CACHE: true,
   },
   specs: {
     H100: { flops: 989e12, hbm_bw: 3.35e12, hbm_cap: 80e9, ram_bw: 55e9, rdma_bw: 50e9, disk_bw: 7e9 },
