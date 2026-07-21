@@ -85,6 +85,9 @@ export default function App() {
               <span key={tier}><span className="chip" style={{ background: TIER_COLOR[tier] }} />
                 {tier} ({tierCount[tier]})</span>
             ))}
+            <span><span className="chip"
+              style={{ background: 'color-mix(in srgb, var(--ink) 50%, transparent)' }} />
+              queue depth (strip under each lane)</span>
             <span style={{ color: 'var(--muted)' }}>
               {result.requests.count} requests · mean in {Math.round(result.requests.mean_input)} tok
               · out {Math.round(result.requests.mean_output)} tok · span {fmtT(run.span)}</span>
@@ -144,7 +147,15 @@ export default function App() {
           </table>
         </div>
 
-        {tip && (
+        {tip && tip.e.queue && (
+          <div className="tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
+            <div><b>{tip.e.gpu}</b> queue</div>
+            <div style={{ color: 'var(--ink-2)', marginTop: 3 }}>
+              {tip.e.depth} waiting · {fmtT(tip.e.t0)} → {fmtT(tip.e.t1)}
+            </div>
+          </div>
+        )}
+        {tip && !tip.e.queue && (
           <div className="tip" style={{ left: tip.x + 14, top: tip.y + 14 }}>
             <div><span className="chip" style={{ background: TIER_COLOR[tip.e.tier] }} />
               <b>#{tip.e.id}</b> {tip.e.group} → {tip.e.gpu}</div>
