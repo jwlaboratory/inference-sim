@@ -2,6 +2,8 @@
 
 Run date: 2026-07-21.
 
+Additional cross-system percentages are in `standard-systems/SUMMARY.md`.
+
 ## Setup Used
 
 - Cluster: 8 independent replicas, each replica is 8 x H100 80GB with TP=8.
