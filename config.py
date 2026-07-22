@@ -40,7 +40,7 @@ class GPUSpec:
     hbm_bw: float    # HBM bandwidth
     hbm_cap: float   # HBM capacity
     ram_bw: float    # host RAM <-> GPU (PCIe)
-    rdma_bw: float   # peer GPU over the network
+    rdma_bw: float   # cross-node RDMA (NIC) bandwidth
     disk_bw: float   # local NVMe read
 
 
@@ -62,24 +62,9 @@ MI355X = GPUSpec("MI355X", 2500e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
 IMBALANCE_ABS = 64     # in-flight requests (SGLang --balance-abs-threshold)
 IMBALANCE_REL = 1.5    # max_load > REL * min_load (SGLang --balance-rel-threshold)
 
-# Cross-node prefix reuse rides a shared RDMA fabric with finite fan-in. With
-# this on, concurrent peer transfers contend during a burst: when many nodes
-# pull KV from the few holding a hot prefix at once, each transfer slows (modeled
-# mean-field in simulate.advance -- a peer load is stretched by up to the node
-# count when the puller is backlogged). This erodes the shared-cache advantage
-# exactly when a flash crowd hits. A single transfer on an idle fabric is
-# unchanged. Off = every transfer gets full bandwidth in isolation (the prior,
-# contention-free behavior).
-RDMA_CONGESTION = True
-
-# Opportunistic peer-to-peer KV reuse. When True, a node that misses a prefix
-# locally may pull it from any peer that holds it over RDMA (a "cache steal").
-# Real SGLang does NOT do this on the least-load/cache-aware path: a miss just
-# recomputes the prefix; cross-worker KV movement is instead a structured PD
-# handoff (Mooncake/NIXL) or a shared pool (HiCache). Set False to model that
-# realistic recompute-on-miss behavior. This gates only the *baseline* reuse
-# path -- BTB's structured warming push always transfers at full RDMA bandwidth.
-ADMIT_RDMA = True
+# A prefix a node holds locally is reused; otherwise it is recomputed. Cross-node
+# KV movement happens only as a structured push (e.g. BTB warming) at full RDMA
+# bandwidth (rdma_bw).
 
 # ---------------------------------------------------------------- simulate.py
 # cluster = list of nodes: (name, GPUSpec, gpu count). GPUs within a node

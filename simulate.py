@@ -4,7 +4,7 @@ Each request is routed to a node on arrival and joins that node's waiting
 queue. A node admits requests into its continuous batch whenever there is
 KV headroom and the batch is under MAX_BATCH: admission reuses the longest
 cached run of prefix blocks — free from local HBM, else loaded from host
-RAM / a peer node via RDMA / disk, or recomputed if that's cheaper — then
+RAM / an optional shared disk tier, or recomputed if that's cheaper — then
 prefills the remaining prompt, briefly pausing decode (prefill-priority
 scheduling, as in vLLM/SGLang defaults). All running sequences decode
 together: each step reads the weights once for the whole batch, so decode
@@ -26,18 +26,15 @@ def default_cfg():
     return SimpleNamespace(**config.as_dict())
 
 
-def prefix_source(req, node, nodes, disk, cfg):
-    """Best cached copy of the request's leading blocks: (blocks, load_s, tier)."""
+def prefix_source(req, node, disk, cfg):
+    """Best cached copy of the request's leading blocks: (blocks, load_s, tier).
+
+    A prefix the node holds locally is reused from HBM/RAM; otherwise it is
+    recomputed, unless an optional shared disk tier is enabled to supply it."""
     hbm_n, ram_n = node.match(req.blocks)
     local = (hbm_n + ram_n, node.load_time(ram_n * node.block_bytes, "ram"),
              "hbm" if ram_n == 0 else "ram")
     candidates = [local]
-
-    if getattr(cfg, "ADMIT_RDMA", True):
-        # opportunistic peer-to-peer KV pull (see config.ADMIT_RDMA). Off => a
-        # miss recomputes instead of stealing a peer's KV (real SGLang behavior).
-        remote_n = max((sum(nd.match(req.blocks)) for nd in nodes if nd is not node), default=0)
-        candidates.append((remote_n, node.load_time(remote_n * node.block_bytes, "rdma"), "rdma"))
 
     if cfg.DISK_CACHE:
         disk_n = 0
@@ -93,20 +90,9 @@ def advance(node, until, nodes, disk, cfg, events):
                         f"weights — add GPUs to the node or quantize")
                 break
             node.waiting.popleft()
-            n, load, tier = prefix_source(req, node, nodes, disk, cfg)
+            n, load, tier = prefix_source(req, node, disk, cfg)
             hit = min(n * cfg.BLOCK_TOKENS, req.prefix_tokens)
             recompute = node.prefill_time(hit)
-            if getattr(cfg, "RDMA_CONGESTION", False) and tier == "rdma" and load > 0:
-                # Mean-field RDMA fabric contention: a burst makes many nodes
-                # pull KV from the few holding a hot prefix at once, so peer
-                # transfers share the fabric's fan-in. Burst pressure is sensed
-                # locally from this node's own backlog and stretches the transfer
-                # by up to the node count (the fan-in bound); an idle-fabric
-                # transfer (backlog <= 1) is unchanged. When contention makes a
-                # local recompute cheaper, the request recomputes instead.
-                load *= min(len(nodes), max(1, len(node.waiting)))
-                if load >= recompute:
-                    tier = "miss"
             reuse = min(load, recompute)   # recompute if loading is slower
             prefill = node.prefill_time(req.input_tokens - hit)
             node.running.append(Seq(req, node.now, reuse, prefill, hit, tier))
