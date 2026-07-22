@@ -5,3 +5,4 @@ ui/dist/
 trace.csv
 output.csv
 .vercel
+experiments/

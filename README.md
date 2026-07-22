@@ -32,6 +32,10 @@ rl/            learned router policy, CEM trainer, and saved weights
 ui/            React (Vite) frontend: config editor, metrics, Gantt playback
 ```
 
+Research-specific BTB experiments are intentionally kept out of this repo. In
+the recommended local layout they live in the sibling
+`../bite-the-bullet/experiments/` tree and import these simulator modules.
+
 **Workload.** Requests come from a Mooncake-format trace
 ([ART-Chat-2.5M](https://huggingface.co/datasets/alessiotoniolo/ART-Chat-2.5M)):
 each row has real arrival timestamps, input/output token counts, and
