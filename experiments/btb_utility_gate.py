@@ -1011,8 +1011,13 @@ def summarize(nodes: list[Node], events: list[dict], stats: dict) -> dict:
     }
 
 
-def objective(row: dict, metric: str) -> float:
-    return float(row[metric])
+def objective(row: dict, args: argparse.Namespace) -> float:
+    return (
+        float(row[args.objective_metric])
+        + args.warm_gb_cost * float(row.get("warm_gb", 0.0))
+        + args.warm_busy_cost * float(row.get("warm_busy_s", 0.0))
+        + args.trigger_cost * float(row.get("triggers", 0.0))
+    )
 
 
 def label_examples(args: argparse.Namespace, cfg: SimpleNamespace, windows: list[Window]) -> tuple[list[Example], dict]:
@@ -1028,9 +1033,10 @@ def label_examples(args: argparse.Namespace, cfg: SimpleNamespace, windows: list
             active_ttl_s=args.active_ttl_s,
         )
         baselines[w] = baseline
-        base_obj = objective(baseline, args.objective_metric)
+        base_obj = objective(baseline, args)
         print(
-            f"label window {w:02d}: baseline {args.objective_metric}={base_obj:.6f}, "
+            f"label window {w:02d}: baseline objective={base_obj:.6f}, "
+            f"{args.objective_metric}={baseline[args.objective_metric]:.6f}, "
             f"candidates={len(window.candidates)}",
             flush=True,
         )
@@ -1044,7 +1050,7 @@ def label_examples(args: argparse.Namespace, cfg: SimpleNamespace, windows: list
                 active_ttl_s=args.active_ttl_s,
                 trigger_ids={req_id},
             )
-            util = base_obj - objective(warmed, args.objective_metric)
+            util = base_obj - objective(warmed, args)
             examples.append(
                 Example(
                     window_id=w,
@@ -1208,10 +1214,13 @@ def choose_threshold_by_replay(
         by_window_examples[ex.window_id].append(ex)
 
     thresholds = {1.1}
-    for i in range(0, 101):
-        thresholds.add(i / 100)
-    for ex in examples:
-        thresholds.add(round(scores[(ex.window_id, ex.request_id)], 4))
+    if args.threshold_grid_step > 0:
+        steps = math.ceil(1.0 / args.threshold_grid_step)
+        for i in range(steps + 1):
+            thresholds.add(min(1.0, round(i * args.threshold_grid_step, 4)))
+    if args.threshold_score_candidates:
+        for ex in examples:
+            thresholds.add(round(scores[(ex.window_id, ex.request_id)], 4))
 
     topk_options = sorted(set(args.gate_topk_options or [0]))
     best_threshold = 1.1
@@ -1243,7 +1252,7 @@ def choose_threshold_by_replay(
                     )
                 )
             summary = aggregate(rows)
-            obj = summary[args.objective_metric]
+            obj = objective(summary, args)
             warm = summary["warm_busy_s"] + summary["warm_gb"]
             sweep[f"{threshold:.4f}:topk={topk or 'all'}"] = summary
             if (obj, warm) < (best_obj, best_warm):
@@ -1306,7 +1315,7 @@ def evaluate_policy_set(
         candidate_ids = set(window.candidates)
         oracle_ids = {ex.request_id for ex in by_window_examples[window_id] if ex.label}
         greedy_ids: set[int] = set()
-        greedy_obj = objective(baseline, args.objective_metric)
+        greedy_obj = objective(baseline, args)
         for ex in sorted(by_window_examples[window_id], key=lambda item: item.utility, reverse=True):
             if ex.utility <= args.min_utility:
                 continue
@@ -1320,7 +1329,7 @@ def evaluate_policy_set(
                 active_ttl_s=args.active_ttl_s,
                 trigger_ids=trial_ids,
             )
-            trial_obj = objective(trial, args.objective_metric)
+            trial_obj = objective(trial, args)
             if trial_obj < greedy_obj:
                 greedy_obj = trial_obj
                 greedy_ids = trial_ids
@@ -1416,6 +1425,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--imbalance-abs", type=int, default=8)
     parser.add_argument("--imbalance-rel", type=float, default=1.5)
     parser.add_argument("--objective-metric", choices=["mean_ttft", "p95_ttft", "mean_lat", "p95_lat"], default="mean_ttft")
+    parser.add_argument("--warm-gb-cost", type=float, default=0.0)
+    parser.add_argument("--warm-busy-cost", type=float, default=0.0)
+    parser.add_argument("--trigger-cost", type=float, default=0.0)
     parser.add_argument("--min-utility", type=float, default=0.0)
     parser.add_argument("--max-candidates-per-window", type=int, default=80)
     parser.add_argument("--include-cold-candidates", action="store_true")
@@ -1430,6 +1442,14 @@ def parse_args() -> argparse.Namespace:
         default=[0],
         help="Per-window trained-gate trigger caps to consider during replay threshold selection; 0 means no cap.",
     )
+    parser.add_argument("--threshold-grid-step", type=float, default=0.01)
+    parser.add_argument(
+        "--threshold-score-candidates",
+        dest="threshold_score_candidates",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument("--no-threshold-score-candidates", dest="threshold_score_candidates", action="store_false")
     parser.add_argument("--progress-every", type=int, default=20)
     parser.add_argument("--out", default="experiments/btb_utility_gate_results.json")
     return parser.parse_args()
@@ -1448,7 +1468,10 @@ def main() -> None:
         "BTB utility-gate experiment: "
         f"{args.windows} windows x {args.rows_per_window} rows, train_windows={args.train_windows}, "
         f"source={args.source}, dataset={args.dataset}, config={args.config_name}, "
-        f"objective={args.objective_metric}",
+        f"objective={args.objective_metric}"
+        f"+{args.warm_gb_cost:g}*warm_gb"
+        f"+{args.warm_busy_cost:g}*warm_busy_s"
+        f"+{args.trigger_cost:g}*triggers",
         flush=True,
     )
     windows = load_windows(args, cfg)
@@ -1492,6 +1515,7 @@ def main() -> None:
         best = replay_threshold_info["best"]
         print(
             "threshold selected by train replay: "
+            f"objective {objective(base, args):.6f} -> {objective(best, args):.6f}, "
             f"{args.objective_metric} {base[args.objective_metric]:.6f} -> "
             f"{best[args.objective_metric]:.6f}, triggers={best['triggers']:.1f}, "
             f"gate_topk={gate_topk or 'all'}",
@@ -1521,6 +1545,12 @@ def main() -> None:
         "gate_topk": gate_topk,
         "class_f1_threshold": class_threshold,
         "threshold_selection": args.threshold_selection,
+        "objective": {
+            "metric": args.objective_metric,
+            "warm_gb_cost": args.warm_gb_cost,
+            "warm_busy_cost": args.warm_busy_cost,
+            "trigger_cost": args.trigger_cost,
+        },
         "replay_threshold_info": replay_threshold_info,
         "train_summary": train_summary,
         "test_summary": test_summary,

@@ -30,8 +30,8 @@ improves the combined replay objective.
 | Mooncake trace | Real `hash_ids` | Boundary/no-op | no utility-positive triggers in sampled windows |
 | Qwen Bailian To-C | Real `hash_ids` | Weak positive | random windows: trained gate mean TTFT -0.9%, p95 ~neutral |
 | Qwen Bailian To-B | Real `hash_ids` | Boundary/no-op | permissive key: trained gate no-ops on held-out |
-| Qwen Bailian Thinking | Real `hash_ids` | Current gate fails | random windows: trained gate mean TTFT +8.3%, greedy oracle mean -6.8% |
-| Qwen Bailian Coder | Real `hash_ids` | Current gate fails | trained gate mean TTFT +4.3%, greedy oracle mean -2.0% |
+| Qwen Bailian Thinking | Real `hash_ids` | Cost-aware positive | warm-cost gate: mean TTFT -4.2%, p95 TTFT -3.5% |
+| Qwen Bailian Coder | Real `hash_ids` | Cost-aware no-op | warm-cost gate no-ops; mean-only gate was harmful |
 | BurstGPT v2 | Session-derived blocks | Weak/semi-real | stressed session replay: trained gate p95 TTFT -4.8%, mean ~neutral |
 
 BurstGPT is not Mooncake-compatible as released: v2 has `Timestamp`,
@@ -47,6 +47,18 @@ workloads. By default it expects fields named `timestamp`, `input_length`,
 is absent, the adapter can derive synthetic session-prefix blocks from
 `session_id`, which is useful for exploratory session workloads but should be
 reported as semi-real rather than true KV-hash evidence.
+
+The utility objective can charge warm work in addition to latency:
+
+```text
+objective = metric + warm_gb_cost * warm_gb
+                 + warm_busy_cost * warm_busy_s
+                 + trigger_cost * triggers
+```
+
+This keeps the old latency-only behavior by default while allowing the gate to
+learn "worth it after warming overhead" rather than "any latency drop at any
+cost."
 
 Example generic JSONL command:
 
@@ -69,6 +81,12 @@ GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
   /tmp/qwen-bailian-usagetraces-anon
 git -C /tmp/qwen-bailian-usagetraces-anon lfs pull \
   --include='qwen_traceA_blksz_16.jsonl,qwen_traceB_blksz_16.jsonl,qwen_thinking_blksz_16.jsonl,qwen_coder_blksz_16.jsonl'
+```
+
+Summarize result artifacts:
+
+```bash
+python3 experiments/btb_result_summary.py experiments/btb_utility_gate_*.json
 ```
 
 ## Current Results
@@ -242,7 +260,7 @@ Held-out replay:
 Takeaway: useful negative control. The API/task trace is mostly single-turn; the
 trained gate no-ops on held-out.
 
-### Qwen Bailian Thinking, Real Hashes
+### Qwen Bailian Thinking, Warm-Cost Real Hashes
 
 Command:
 
@@ -265,8 +283,11 @@ python3 experiments/btb_utility_gate.py \
   --active-ttl-s 60 \
   --max-candidates-per-window 60 \
   --include-cold-candidates \
-  --gate-topk-options 1 2 4 0 \
-  --out experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_topk.json
+  --warm-gb-cost 1.0 \
+  --gate-topk-options 1 2 4 8 0 \
+  --threshold-grid-step 0.1 \
+  --no-threshold-score-candidates \
+  --out experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost.json
 ```
 
 Held-out replay:
@@ -275,14 +296,14 @@ Held-out replay:
 | --- | ---: | ---: | ---: | ---: |
 | baseline | 0.364s | 1.496s | 0.0 | 0.000 |
 | trigger all | 0.533s | 1.490s | 60.0 | 0.503 |
-| greedy oracle | 0.339s | 1.365s | 2.0 | 0.336 |
-| trained gate | 0.394s | 1.501s | 32.2 | 0.252 |
+| greedy oracle | 0.349s | 1.428s | 0.8 | 0.000 |
+| trained gate | 0.349s | 1.443s | 14.8 | 0.084 |
 
-Takeaway: real-hash failure with oracle headroom. The replay-selected top-k
-search chose uncapped gating, so the current features still over-trigger under
-distribution shift.
+Takeaway: cost-aware utility fixes the previous mean-only failure on this
+split. The old latency-only gate over-triggered and worsened held-out mean TTFT
+by 8.3%; charging warm GB reduces warm work and improves both mean and p95 TTFT.
 
-### Qwen Bailian Coder, Real Hashes
+### Qwen Bailian Coder, Warm-Cost Real Hashes
 
 Command:
 
@@ -306,7 +327,11 @@ python3 experiments/btb_utility_gate.py \
   --active-ttl-s 60 \
   --max-candidates-per-window 60 \
   --include-cold-candidates \
-  --out experiments/btb_utility_gate_qwen_coder_blksz_16_h60_k32.json
+  --warm-gb-cost 1.0 \
+  --gate-topk-options 1 2 4 8 0 \
+  --threshold-grid-step 0.1 \
+  --no-threshold-score-candidates \
+  --out experiments/btb_utility_gate_qwen_coder_blksz_16_h60_k32_cost.json
 ```
 
 Held-out replay:
@@ -315,19 +340,18 @@ Held-out replay:
 | --- | ---: | ---: | ---: | ---: |
 | baseline | 0.304s | 0.928s | 0.0 | 0.000 |
 | trigger all | 0.324s | 0.936s | 60.0 | 3.020 |
-| greedy oracle | 0.298s | 0.925s | 1.7 | 0.783 |
-| trained gate | 0.317s | 0.942s | 3.7 | 1.174 |
+| greedy oracle | 0.304s | 0.928s | 0.0 | 0.000 |
+| trained gate | 0.304s | 0.928s | 0.0 | 0.000 |
 
-Takeaway: current learned gate does not generalize on coder. The sparse greedy
-oracle says there is a small positive policy available, but the model needs
-better regime features or stricter utility/cost calibration.
+Takeaway: with warm work charged, coder becomes a no-op. This is better than the
+latency-only trained gate, which warmed 1.174 GB/window and worsened held-out
+mean TTFT by 4.3%.
 
 ## Next Research Loop
 
-- Add cost/tail-aware objective calibration that penalizes warm GB/GPU-seconds,
-  not only latency.
-- Speed up replay threshold and top-k search; current multi-budget sweeps are
-  correct but expensive.
+- Add tail-aware objective calibration and rerun p95-targeted Qwen sweeps.
+- Tune warm-cost units against real serving measurements instead of treating
+  `warm_gb_cost=1.0` as final.
 - Add regime features for distribution shift: per-window load, recent queueing,
   and candidate density.
 - Run K-fold/random-window evaluation over Qwen Bailian before calling any
