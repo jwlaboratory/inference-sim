@@ -1072,6 +1072,10 @@ def split_examples(examples: list[Example], train_windows: int) -> tuple[list[Ex
     return train, test
 
 
+def window_slice_examples(examples: list[Example], start_window: int, end_window: int) -> list[Example]:
+    return [ex for ex in examples if start_window <= ex.window_id < end_window]
+
+
 def standardizer(train: list[Example]) -> tuple[list[float], list[float]]:
     means = []
     stds = []
@@ -1404,6 +1408,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jsonl-message-field", default="messages")
     parser.add_argument("--windows", type=int, default=6)
     parser.add_argument("--train-windows", type=int, default=3)
+    parser.add_argument(
+        "--threshold-windows",
+        type=int,
+        default=0,
+        help="Reserve this many pre-test windows for replay threshold/top-k selection instead of selecting on fit windows.",
+    )
     parser.add_argument("--rows-per-window", type=int, default=500)
     parser.add_argument("--max-parquet-files", type=int, default=1)
     parser.add_argument("--seed", type=int, default=23)
@@ -1459,6 +1469,8 @@ def main() -> None:
     args = parse_args()
     if args.train_windows <= 0 or args.train_windows >= args.windows:
         raise SystemExit("--train-windows must be between 1 and windows-1")
+    if args.threshold_windows < 0 or args.threshold_windows >= args.train_windows:
+        raise SystemExit("--threshold-windows must be >= 0 and smaller than --train-windows")
     if args.source == "jsonl" and not args.jsonl_path:
         raise SystemExit("--jsonl-path is required when --source jsonl")
     cfg = make_cfg(args)
@@ -1479,6 +1491,17 @@ def main() -> None:
     train, test = split_examples(examples, args.train_windows)
     if not train or not test:
         raise SystemExit("not enough train/test examples")
+    threshold_start = args.train_windows - args.threshold_windows if args.threshold_windows else 0
+    fit_examples = window_slice_examples(examples, 0, threshold_start) if args.threshold_windows else train
+    threshold_examples = (
+        window_slice_examples(examples, threshold_start, args.train_windows)
+        if args.threshold_windows
+        else train
+    )
+    if not fit_examples:
+        raise SystemExit("not enough fit examples")
+    if not threshold_examples:
+        raise SystemExit("not enough threshold-selection examples")
 
     print(
         f"\nexamples: train={len(train)} pos={sum(ex.label for ex in train)} "
@@ -1487,28 +1510,43 @@ def main() -> None:
         f"({sum(ex.label for ex in test) / len(test):.1%})",
         flush=True,
     )
+    if args.threshold_windows:
+        print(
+            f"fit examples: n={len(fit_examples)} pos={sum(ex.label for ex in fit_examples)} "
+            f"({sum(ex.label for ex in fit_examples) / len(fit_examples):.1%}); "
+            f"threshold examples: n={len(threshold_examples)} pos={sum(ex.label for ex in threshold_examples)} "
+            f"({sum(ex.label for ex in threshold_examples) / len(threshold_examples):.1%})",
+            flush=True,
+        )
 
-    means, stds = standardizer(train)
-    weights = train_logreg(train, means, stds, epochs=args.epochs, lr=args.lr, l2=args.l2)
+    means, stds = standardizer(fit_examples)
+    weights = train_logreg(fit_examples, means, stds, epochs=args.epochs, lr=args.lr, l2=args.l2)
     all_scores = {
         (ex.window_id, ex.request_id): score_example(ex, means, stds, weights)
         for ex in examples
     }
-    class_threshold, _ = choose_threshold(train, all_scores)
+    class_threshold, _ = choose_threshold(threshold_examples, all_scores)
     threshold = class_threshold
     gate_topk = 0
     replay_threshold_info = None
     if args.threshold_selection == "replay":
+        threshold_windows = (
+            windows[threshold_start : args.train_windows]
+            if args.threshold_windows
+            else windows[: args.train_windows]
+        )
         threshold, gate_topk, _, replay_threshold_info = choose_threshold_by_replay(
             args,
             cfg,
-            windows[: args.train_windows],
-            train,
+            threshold_windows,
+            threshold_examples,
             all_scores,
             baselines,
         )
     test_class_metrics = binary_metrics(test, all_scores, threshold, gate_topk)
     train_class_metrics = binary_metrics(train, all_scores, threshold, gate_topk)
+    fit_class_metrics = binary_metrics(fit_examples, all_scores, threshold, gate_topk)
+    threshold_class_metrics = binary_metrics(threshold_examples, all_scores, threshold, gate_topk)
     print(f"chosen threshold={threshold:.3f}, gate_topk={gate_topk or 'all'}")
     if args.threshold_selection == "replay":
         base = replay_threshold_info["baseline"]
@@ -1522,6 +1560,9 @@ def main() -> None:
             flush=True,
         )
     print(f"train gate metrics: {train_class_metrics}")
+    if args.threshold_windows:
+        print(f"fit   gate metrics: {fit_class_metrics}")
+        print(f"valid gate metrics: {threshold_class_metrics}")
     print(f"test  gate metrics: {test_class_metrics}")
 
     train_windows = windows[: args.train_windows]
@@ -1540,11 +1581,17 @@ def main() -> None:
     payload = {
         "args": vars(args),
         "windows": [window.ident for window in windows],
-        "class_metrics": {"train": train_class_metrics, "test": test_class_metrics},
+        "class_metrics": {
+            "train": train_class_metrics,
+            "fit": fit_class_metrics,
+            "threshold": threshold_class_metrics,
+            "test": test_class_metrics,
+        },
         "threshold": threshold,
         "gate_topk": gate_topk,
         "class_f1_threshold": class_threshold,
         "threshold_selection": args.threshold_selection,
+        "threshold_start_window": threshold_start,
         "objective": {
             "metric": args.objective_metric,
             "warm_gb_cost": args.warm_gb_cost,

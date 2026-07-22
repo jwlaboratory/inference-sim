@@ -30,7 +30,7 @@ improves the combined replay objective.
 | Mooncake trace | Real `hash_ids` | Boundary/no-op | no utility-positive triggers in sampled windows |
 | Qwen Bailian To-C | Real `hash_ids` | Weak positive | random windows: trained gate mean TTFT -0.9%, p95 ~neutral |
 | Qwen Bailian To-B | Real `hash_ids` | Boundary/no-op | permissive key: trained gate no-ops on held-out |
-| Qwen Bailian Thinking | Real `hash_ids` | Cost-aware positive | warm-cost gate: mean TTFT -4.2%, p95 TTFT -3.5% |
+| Qwen Bailian Thinking | Real `hash_ids` | Split-sensitive | 3 random warm-cost splits: mean TTFT -1.4% +/- 2.4%, but composite cost worsens |
 | Qwen Bailian Coder | Real `hash_ids` | Cost-aware no-op | warm-cost gate no-ops; mean-only gate was harmful |
 | BurstGPT v2 | Session-derived blocks | Weak/semi-real | stressed session replay: trained gate p95 TTFT -4.8%, mean ~neutral |
 
@@ -59,6 +59,11 @@ objective = metric + warm_gb_cost * warm_gb
 This keeps the old latency-only behavior by default while allowing the gate to
 learn "worth it after warming overhead" rather than "any latency drop at any
 cost."
+
+For more conservative calibration, `--threshold-windows N` reserves the last
+`N` pre-test windows for threshold/top-k selection instead of selecting on the
+same windows used to fit the logistic model. This is useful for detecting score
+calibration drift across trace regions.
 
 Example generic JSONL command:
 
@@ -302,6 +307,102 @@ Held-out replay:
 Takeaway: cost-aware utility fixes the previous mean-only failure on this
 split. The old latency-only gate over-triggered and worsened held-out mean TTFT
 by 8.3%; charging warm GB reduces warm work and improves both mean and p95 TTFT.
+However, this does not yet generalize strongly across random splits; see the
+split-stability pilot below.
+
+### Qwen Bailian Thinking, Split-Stability Pilot
+
+Additional random-split commands; the seed-23 artifact is the single-split
+result above:
+
+```bash
+for seed in 11 37; do
+  python3 experiments/btb_utility_gate.py \
+    --source jsonl \
+    --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_thinking_blksz_16.jsonl \
+    --windows 8 \
+    --train-windows 4 \
+    --rows-per-window 600 \
+    --seed "$seed" \
+    --arrival-scale 1 \
+    --block-tokens 16 \
+    --key-blocks 32 \
+    --warm-blocks 32 \
+    --model-preset default \
+    --num-replicas 4 \
+    --gpus-per-replica 4 \
+    --horizon-s 60 \
+    --future-k 2 \
+    --active-ttl-s 60 \
+    --max-candidates-per-window 60 \
+    --include-cold-candidates \
+    --warm-gb-cost 1.0 \
+    --gate-topk-options 1 2 4 8 0 \
+    --threshold-grid-step 0.1 \
+    --no-threshold-score-candidates \
+    --out experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_seed${seed}.json
+done
+```
+
+Grouped result:
+
+```bash
+python3 experiments/btb_result_summary.py --group-by-label \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost.json \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_seed11.json \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_seed37.json
+```
+
+| Workload | N | dObjective | Trained dMean | Trained dP95 | Trig/win | Warm GB/win | Greedy dMean | Greedy dP95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| qwen_thinking_blksz_16, warm-cost | 3 | +0.1767 +/- 0.2105 | -1.4% +/- 2.4% | -0.7% +/- 2.6% | 6.4 +/- 7.4 | 0.182 +/- 0.207 | -2.5% +/- 2.2% | -2.5% +/- 2.3% |
+
+Validation-threshold variant:
+
+```bash
+for seed in 23 11 37; do
+  python3 experiments/btb_utility_gate.py \
+    --source jsonl \
+    --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_thinking_blksz_16.jsonl \
+    --windows 8 \
+    --train-windows 4 \
+    --threshold-windows 2 \
+    --rows-per-window 600 \
+    --seed "$seed" \
+    --arrival-scale 1 \
+    --block-tokens 16 \
+    --key-blocks 32 \
+    --warm-blocks 32 \
+    --model-preset default \
+    --num-replicas 4 \
+    --gpus-per-replica 4 \
+    --horizon-s 60 \
+    --future-k 2 \
+    --active-ttl-s 60 \
+    --max-candidates-per-window 60 \
+    --include-cold-candidates \
+    --warm-gb-cost 1.0 \
+    --gate-topk-options 1 2 4 8 0 \
+    --threshold-grid-step 0.1 \
+    --no-threshold-score-candidates \
+    --out experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_valid_seed${seed}.json
+done
+```
+
+```bash
+python3 experiments/btb_result_summary.py --group-by-label \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_valid_seed23.json \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_valid_seed11.json \
+  experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_warmcost_valid_seed37.json
+```
+
+| Workload | N | dObjective | Trained dMean | Trained dP95 | Trig/win | Warm GB/win | Greedy dMean | Greedy dP95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| qwen_thinking_blksz_16, warm-cost + validation threshold | 3 | +0.5533 +/- 0.3137 | +2.2% +/- 3.8% | +0.5% +/- 1.0% | 12.6 +/- 10.8 | 0.545 +/- 0.328 | -2.5% +/- 2.2% | -2.5% +/- 2.3% |
+
+Takeaway: Qwen Thinking has real oracle headroom, but the current logistic gate
+is not robust enough to call this a publishable win. A validation-window
+threshold split surfaces score calibration drift rather than fixing it.
 
 ### Qwen Bailian Coder, Warm-Cost Real Hashes
 
@@ -352,9 +453,9 @@ mean TTFT by 4.3%.
 - Add tail-aware objective calibration and rerun p95-targeted Qwen sweeps.
 - Tune warm-cost units against real serving measurements instead of treating
   `warm_gb_cost=1.0` as final.
-- Add regime features for distribution shift: per-window load, recent queueing,
-  and candidate density.
-- Run K-fold/random-window evaluation over Qwen Bailian before calling any
+- Add regime features for distribution shift: per-window load, candidate score
+  calibration, recent queueing, and candidate density.
+- Run K-fold/random-window evaluation over ART and Qwen before calling any new
   Bailian result publishable.
 - Add a small real-hardware replay once an OpenAI-compatible prefix-cache server
   is available.
