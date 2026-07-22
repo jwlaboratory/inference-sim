@@ -14,7 +14,8 @@ This folder tracks the stronger "bite the bullet" hypothesis:
 3. Label each candidate by counterfactual replay: fire only that trigger and
    mark it positive if the selected objective improves.
 4. Train a standardized logistic gate on train-window candidates.
-5. Select the trigger threshold by train-window replay utility.
+5. Select the trigger threshold, and optionally a per-window trigger budget,
+   by train-window replay utility.
 6. Evaluate held-out baseline, trigger-all, greedy oracle, and trained gate.
 
 The greedy oracle is intentionally conservative: it considers candidates ranked
@@ -27,6 +28,10 @@ improves the combined replay objective.
 | --- | --- | --- | --- |
 | ART-Chat-2.5M | Real `hash_ids` | Positive | trained gate: mean TTFT -8.5%, p95 TTFT -10.5% |
 | Mooncake trace | Real `hash_ids` | Boundary/no-op | no utility-positive triggers in sampled windows |
+| Qwen Bailian To-C | Real `hash_ids` | Weak positive | random windows: trained gate mean TTFT -0.9%, p95 ~neutral |
+| Qwen Bailian To-B | Real `hash_ids` | Boundary/no-op | permissive key: trained gate no-ops on held-out |
+| Qwen Bailian Thinking | Real `hash_ids` | Current gate fails | random windows: trained gate mean TTFT +8.3%, greedy oracle mean -6.8% |
+| Qwen Bailian Coder | Real `hash_ids` | Current gate fails | trained gate mean TTFT +4.3%, greedy oracle mean -2.0% |
 | BurstGPT v2 | Session-derived blocks | Weak/semi-real | stressed session replay: trained gate p95 TTFT -4.8%, mean ~neutral |
 
 BurstGPT is not Mooncake-compatible as released: v2 has `Timestamp`,
@@ -35,6 +40,36 @@ tokens, and log type, but no prompt block hashes. The adapter therefore treats
 turns in the same session as sharing deterministic synthetic prefix blocks up
 to the observed request-token length. Use BurstGPT results as a session-derived
 stress test, not as direct KV-hash evidence.
+
+The harness also supports a generic `--source jsonl` adapter for future
+workloads. By default it expects fields named `timestamp`, `input_length`,
+`output_length`, and `hash_ids`; all field names are configurable. If `hash_ids`
+is absent, the adapter can derive synthetic session-prefix blocks from
+`session_id`, which is useful for exploratory session workloads but should be
+reported as semi-real rather than true KV-hash evidence.
+
+Example generic JSONL command:
+
+```bash
+python3 experiments/btb_utility_gate.py \
+  --source jsonl \
+  --jsonl-path path/to/workload.jsonl \
+  --block-tokens 256 \
+  --key-blocks 4 \
+  --warm-blocks 4
+```
+
+Qwen Bailian is the best next public workload family found so far. It ships
+production-derived JSONL traces with salted `hash_ids` at 16 tokens/block. To
+reproduce the local runs below:
+
+```bash
+GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
+  https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon.git \
+  /tmp/qwen-bailian-usagetraces-anon
+git -C /tmp/qwen-bailian-usagetraces-anon lfs pull \
+  --include='qwen_traceA_blksz_16.jsonl,qwen_traceB_blksz_16.jsonl,qwen_thinking_blksz_16.jsonl,qwen_coder_blksz_16.jsonl'
+```
 
 ## Current Results
 
@@ -130,12 +165,172 @@ Takeaway: weak positive p95 signal under stressed session-derived prefix reuse,
 but the trained gate over-warms relative to greedy oracle. This is not yet a
 publishable workload win.
 
+### Qwen Bailian To-C, Real Hashes
+
+Command:
+
+```bash
+python3 experiments/btb_utility_gate.py \
+  --source jsonl \
+  --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_traceA_blksz_16.jsonl \
+  --windows 8 \
+  --train-windows 4 \
+  --rows-per-window 600 \
+  --arrival-scale 1 \
+  --block-tokens 16 \
+  --key-blocks 32 \
+  --warm-blocks 32 \
+  --model-preset default \
+  --num-replicas 4 \
+  --gpus-per-replica 4 \
+  --horizon-s 30 \
+  --future-k 2 \
+  --active-ttl-s 30 \
+  --max-candidates-per-window 60 \
+  --include-cold-candidates \
+  --out experiments/btb_utility_gate_qwen_traceA_blksz_16_random_h30_k32.json
+```
+
+Held-out replay:
+
+| Policy | Mean TTFT | p95 TTFT | Triggers/window | Warm GB/window |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 0.203s | 0.748s | 0.0 | 0.000 |
+| trigger all | 0.200s | 0.758s | 60.0 | 0.084 |
+| greedy oracle | 0.190s | 0.725s | 2.2 | 0.084 |
+| trained gate | 0.201s | 0.748s | 0.5 | 0.000 |
+
+Takeaway: weak real-hash positive. The learned gate avoids most waste and gets a
+small mean TTFT win, but it leaves most oracle headroom unused.
+
+### Qwen Bailian To-B, Real Hashes
+
+Command:
+
+```bash
+python3 experiments/btb_utility_gate.py \
+  --source jsonl \
+  --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_traceB_blksz_16.jsonl \
+  --windows 6 \
+  --train-windows 3 \
+  --rows-per-window 600 \
+  --jsonl-sequential \
+  --arrival-scale 1 \
+  --block-tokens 16 \
+  --key-blocks 8 \
+  --warm-blocks 32 \
+  --model-preset default \
+  --num-replicas 4 \
+  --gpus-per-replica 4 \
+  --horizon-s 10 \
+  --future-k 1 \
+  --active-ttl-s 10 \
+  --max-candidates-per-window 60 \
+  --include-cold-candidates \
+  --out experiments/btb_utility_gate_qwen_traceB_blksz_16_h10_k8.json
+```
+
+Held-out replay:
+
+| Policy | Mean TTFT | p95 TTFT | Triggers/window |
+| --- | ---: | ---: | ---: |
+| baseline | 0.057s | 0.188s | 0.0 |
+| trigger all | 0.057s | 0.188s | 60.0 |
+| greedy oracle | 0.057s | 0.188s | 0.0 |
+| trained gate | 0.057s | 0.188s | 0.0 |
+
+Takeaway: useful negative control. The API/task trace is mostly single-turn; the
+trained gate no-ops on held-out.
+
+### Qwen Bailian Thinking, Real Hashes
+
+Command:
+
+```bash
+python3 experiments/btb_utility_gate.py \
+  --source jsonl \
+  --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_thinking_blksz_16.jsonl \
+  --windows 8 \
+  --train-windows 4 \
+  --rows-per-window 600 \
+  --arrival-scale 1 \
+  --block-tokens 16 \
+  --key-blocks 32 \
+  --warm-blocks 32 \
+  --model-preset default \
+  --num-replicas 4 \
+  --gpus-per-replica 4 \
+  --horizon-s 60 \
+  --future-k 2 \
+  --active-ttl-s 60 \
+  --max-candidates-per-window 60 \
+  --include-cold-candidates \
+  --gate-topk-options 1 2 4 0 \
+  --out experiments/btb_utility_gate_qwen_thinking_blksz_16_random_h60_k32_topk.json
+```
+
+Held-out replay:
+
+| Policy | Mean TTFT | p95 TTFT | Triggers/window | Warm GB/window |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 0.364s | 1.496s | 0.0 | 0.000 |
+| trigger all | 0.533s | 1.490s | 60.0 | 0.503 |
+| greedy oracle | 0.339s | 1.365s | 2.0 | 0.336 |
+| trained gate | 0.394s | 1.501s | 32.2 | 0.252 |
+
+Takeaway: real-hash failure with oracle headroom. The replay-selected top-k
+search chose uncapped gating, so the current features still over-trigger under
+distribution shift.
+
+### Qwen Bailian Coder, Real Hashes
+
+Command:
+
+```bash
+python3 experiments/btb_utility_gate.py \
+  --source jsonl \
+  --jsonl-path /tmp/qwen-bailian-usagetraces-anon/qwen_coder_blksz_16.jsonl \
+  --windows 6 \
+  --train-windows 3 \
+  --rows-per-window 600 \
+  --jsonl-sequential \
+  --arrival-scale 1 \
+  --block-tokens 16 \
+  --key-blocks 32 \
+  --warm-blocks 32 \
+  --model-preset default \
+  --num-replicas 4 \
+  --gpus-per-replica 4 \
+  --horizon-s 60 \
+  --future-k 2 \
+  --active-ttl-s 60 \
+  --max-candidates-per-window 60 \
+  --include-cold-candidates \
+  --out experiments/btb_utility_gate_qwen_coder_blksz_16_h60_k32.json
+```
+
+Held-out replay:
+
+| Policy | Mean TTFT | p95 TTFT | Triggers/window | Warm GB/window |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 0.304s | 0.928s | 0.0 | 0.000 |
+| trigger all | 0.324s | 0.936s | 60.0 | 3.020 |
+| greedy oracle | 0.298s | 0.925s | 1.7 | 0.783 |
+| trained gate | 0.317s | 0.942s | 3.7 | 1.174 |
+
+Takeaway: current learned gate does not generalize on coder. The sparse greedy
+oracle says there is a small positive policy available, but the model needs
+better regime features or stricter utility/cost calibration.
+
 ## Next Research Loop
 
-- Add a grouped-threshold objective that penalizes warm GB/GPU-seconds, not only
-  latency.
-- Test BurstGPT with fewer cold-start candidates and larger train windows.
-- Search for public agent/eval traces with actual request text or block hashes;
-  BurstGPT only gives session IDs.
+- Add cost/tail-aware objective calibration that penalizes warm GB/GPU-seconds,
+  not only latency.
+- Speed up replay threshold and top-k search; current multi-budget sweeps are
+  correct but expensive.
+- Add regime features for distribution shift: per-window load, recent queueing,
+  and candidate density.
+- Run K-fold/random-window evaluation over Qwen Bailian before calling any
+  Bailian result publishable.
 - Add a small real-hardware replay once an OpenAI-compatible prefix-cache server
   is available.

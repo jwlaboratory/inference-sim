@@ -370,6 +370,8 @@ def make_cfg(args: argparse.Namespace) -> SimpleNamespace:
 
 
 def load_windows(args: argparse.Namespace, cfg: SimpleNamespace) -> list[Window]:
+    if args.source == "jsonl":
+        return load_jsonl_windows(args, cfg)
     if args.source == "burstgpt_csv":
         return load_burstgpt_windows(args, cfg)
     return load_mooncake_windows(args, cfg)
@@ -548,6 +550,143 @@ def load_burstgpt_windows(args: argparse.Namespace, cfg: SimpleNamespace) -> lis
             raw_candidates.sort()
 
         ident = f"BurstGPT_3.csv:start{start}"
+        positives = sum(1 for i in raw_candidates if fcounts.get(i, 0) >= args.future_k)
+        print(
+            f"window {w:02d} {ident:<24} rows={len(rows_slice):<5} "
+            f"span={obs[-1].t if obs else 0:.1f}s candidates={len(raw_candidates):<4} "
+            f"future>=k={positives:<4}",
+            flush=True,
+        )
+        windows.append(Window(ident, obs, requests, features, fcounts, raw_candidates))
+    return windows
+
+
+def load_jsonl_rows(path_or_url: str, max_rows: int) -> list[dict]:
+    rows = []
+    if path_or_url.startswith(("http://", "https://")):
+        with urllib.request.urlopen(path_or_url, timeout=120) as resp:
+            lines = (line.decode("utf-8", errors="replace") for line in resp)
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                rows.append(json.loads(line))
+                if max_rows and len(rows) >= max_rows:
+                    break
+        return rows
+    with open(path_or_url, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+            if max_rows and len(rows) >= max_rows:
+                break
+    return rows
+
+
+def value_at(row: dict, field: str, default=None):
+    cur = row
+    for part in field.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def normalize_jsonl_window(
+    rows: list[dict],
+    window_id: int,
+    args: argparse.Namespace,
+) -> list[Obs]:
+    if not rows:
+        return []
+    times = []
+    elapsed = 0.0
+    has_timestamp = value_at(rows[0], args.jsonl_timestamp_field) is not None
+    for row in rows:
+        if has_timestamp:
+            times.append(float(value_at(row, args.jsonl_timestamp_field, 0.0)))
+        else:
+            times.append(elapsed)
+            elapsed += float(value_at(row, args.jsonl_delay_field, 0.0)) / args.jsonl_delay_divisor
+    t0 = times[0] if times else 0.0
+
+    obs = []
+    for i, (row, timestamp) in enumerate(zip(rows, times)):
+        request_id = str(value_at(row, args.jsonl_request_id_field, f"jsonl:{window_id}:{i}"))
+        input_tokens = max(1, int(float(value_at(row, args.jsonl_input_field, 1))))
+        output_tokens = max(1, int(float(value_at(row, args.jsonl_output_field, 1))))
+        raw_blocks = value_at(row, args.jsonl_hash_field)
+        if raw_blocks:
+            blocks = [str(block) for block in raw_blocks]
+        else:
+            session_id = str(value_at(row, args.jsonl_session_field, "") or "").strip()
+            nblocks = max(1, math.ceil(input_tokens / args.block_tokens))
+            if session_id:
+                blocks = [f"jsonl:session:{session_id}:b{j}" for j in range(nblocks)]
+            else:
+                blocks = [f"jsonl:request:{request_id}:b{j}" for j in range(nblocks)]
+        group = str(value_at(row, args.jsonl_group_field, "")) or str(value_at(row, args.jsonl_session_field, ""))
+        obs.append(
+            Obs(
+                window_id=window_id,
+                row_in_window=i,
+                request_id=request_id,
+                t=(timestamp - t0) * args.arrival_scale,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                blocks=blocks,
+                key=key_for(blocks, args.key_blocks),
+                first_block=blocks[0] if blocks else "",
+                system_hash=group,
+                message_bytes=len(str(value_at(row, args.jsonl_message_field, "") or "")),
+            )
+        )
+    return obs
+
+
+def load_jsonl_windows(args: argparse.Namespace, cfg: SimpleNamespace) -> list[Window]:
+    rows = load_jsonl_rows(args.jsonl_path, args.jsonl_max_rows)
+    if len(rows) < args.rows_per_window:
+        raise RuntimeError(f"only loaded {len(rows)} JSONL rows; need {args.rows_per_window}")
+    max_start = len(rows) - args.rows_per_window
+    rng = random.Random(args.seed)
+    if args.jsonl_starts:
+        starts = [start for start in args.jsonl_starts if 0 <= start <= max_start]
+    elif args.jsonl_sequential:
+        starts = [i * args.rows_per_window for i in range(args.windows)]
+        starts = [start for start in starts if start <= max_start]
+    else:
+        starts = sorted(rng.sample(range(max_start + 1), min(args.windows, max_start + 1)))
+    if len(starts) < args.windows:
+        raise RuntimeError(f"only found {len(starts)} JSONL windows; requested {args.windows}")
+
+    windows = []
+    for w, start in enumerate(starts[: args.windows]):
+        rows_slice = rows[start : start + args.rows_per_window]
+        obs = normalize_jsonl_window(rows_slice, w, args)
+        requests = requests_from_obs(obs, cfg)
+        features = build_feature_rows(obs, cfg, args.warm_blocks, args.horizon_s)
+        fcounts = future_counts(obs, args.horizon_s)
+        raw_candidates = [
+            i
+            for i, item in enumerate(obs)
+            if item.key and i in fcounts and (args.include_cold_candidates or features[i].get("same_key_seen", 0.0) > 0)
+        ]
+        if args.max_candidates_per_window and len(raw_candidates) > args.max_candidates_per_window:
+            raw_candidates = sorted(
+                raw_candidates,
+                key=lambda i: (
+                    features[i].get("same_key_30s", 0.0),
+                    features[i].get("same_key_seen", 0.0),
+                    fcounts.get(i, 0),
+                ),
+                reverse=True,
+            )[: args.max_candidates_per_window]
+            raw_candidates.sort()
+
+        ident = f"{args.jsonl_path}:start{start}"
         positives = sum(1 for i in raw_candidates if fcounts.get(i, 0) >= args.future_k)
         print(
             f"window {w:02d} {ident:<24} rows={len(rows_slice):<5} "
@@ -985,9 +1124,43 @@ def score_example(ex: Example, means: list[float], stds: list[float], weights: l
     return sigmoid(sum(w * val for w, val in zip(weights, x)))
 
 
-def binary_metrics(examples: list[Example], scores: dict[tuple[int, int], float], threshold: float) -> dict:
+def select_score_ids(
+    examples: list[Example],
+    scores: dict[tuple[int, int], float],
+    threshold: float,
+    topk: int,
+) -> set[int]:
+    selected = [
+        ex
+        for ex in examples
+        if scores[(ex.window_id, ex.request_id)] >= threshold
+    ]
+    selected.sort(key=lambda ex: scores[(ex.window_id, ex.request_id)], reverse=True)
+    if topk > 0:
+        selected = selected[:topk]
+    return {ex.request_id for ex in selected}
+
+
+def binary_metrics(
+    examples: list[Example],
+    scores: dict[tuple[int, int], float],
+    threshold: float,
+    topk: int = 0,
+) -> dict:
     labels = [ex.label for ex in examples]
-    preds = [1 if scores[(ex.window_id, ex.request_id)] >= threshold else 0 for ex in examples]
+    selected_keys = set()
+    if topk > 0:
+        by_window: dict[int, list[Example]] = defaultdict(list)
+        for ex in examples:
+            by_window[ex.window_id].append(ex)
+        for window_id, window_examples in by_window.items():
+            selected_keys.update(
+                (window_id, req_id)
+                for req_id in select_score_ids(window_examples, scores, threshold, topk)
+            )
+        preds = [1 if (ex.window_id, ex.request_id) in selected_keys else 0 for ex in examples]
+    else:
+        preds = [1 if scores[(ex.window_id, ex.request_id)] >= threshold else 0 for ex in examples]
     tp = sum(1 for y, p in zip(labels, preds) if y and p)
     fp = sum(1 for y, p in zip(labels, preds) if not y and p)
     fn = sum(1 for y, p in zip(labels, preds) if y and not p)
@@ -999,6 +1172,7 @@ def binary_metrics(examples: list[Example], scores: dict[tuple[int, int], float]
         "n": len(examples),
         "base_rate": sum(labels) / len(labels) if labels else 0.0,
         "threshold": threshold,
+        "topk": topk,
         "precision": precision,
         "recall": recall,
         "f1": f1,
@@ -1039,44 +1213,49 @@ def choose_threshold_by_replay(
     for ex in examples:
         thresholds.add(round(scores[(ex.window_id, ex.request_id)], 4))
 
+    topk_options = sorted(set(args.gate_topk_options or [0]))
     best_threshold = 1.1
+    best_topk = 0
     best_summary = None
     best_obj = math.inf
     best_warm = math.inf
     sweep = {}
     for threshold in sorted(thresholds):
-        rows = []
-        for window in windows:
-            window_id = window.obs[0].window_id
-            score_by_id = {
-                ex.request_id: scores[(ex.window_id, ex.request_id)]
-                for ex in by_window_examples[window_id]
-            }
-            rows.append(
-                run_policy(
-                    cfg,
-                    window,
-                    key_blocks=args.key_blocks,
-                    warm_blocks_count=args.warm_blocks,
-                    replicas=args.replicas,
-                    active_ttl_s=args.active_ttl_s,
-                    score_by_id=score_by_id,
-                    threshold=threshold,
+        for topk in topk_options:
+            rows = []
+            for window in windows:
+                window_id = window.obs[0].window_id
+                trigger_ids = select_score_ids(
+                    by_window_examples[window_id],
+                    scores,
+                    threshold,
+                    topk,
                 )
-            )
-        summary = aggregate(rows)
-        obj = summary[args.objective_metric]
-        warm = summary["warm_busy_s"] + summary["warm_gb"]
-        sweep[f"{threshold:.4f}"] = summary
-        if (obj, warm) < (best_obj, best_warm):
-            best_threshold = threshold
-            best_summary = summary
-            best_obj = obj
-            best_warm = warm
+                rows.append(
+                    run_policy(
+                        cfg,
+                        window,
+                        key_blocks=args.key_blocks,
+                        warm_blocks_count=args.warm_blocks,
+                        replicas=args.replicas,
+                        active_ttl_s=args.active_ttl_s,
+                        trigger_ids=trigger_ids,
+                    )
+                )
+            summary = aggregate(rows)
+            obj = summary[args.objective_metric]
+            warm = summary["warm_busy_s"] + summary["warm_gb"]
+            sweep[f"{threshold:.4f}:topk={topk or 'all'}"] = summary
+            if (obj, warm) < (best_obj, best_warm):
+                best_threshold = threshold
+                best_topk = topk
+                best_summary = summary
+                best_obj = obj
+                best_warm = warm
 
     assert best_summary is not None
     baseline_summary = aggregate([baselines[window.obs[0].window_id] for window in windows])
-    return best_threshold, best_summary, {
+    return best_threshold, best_topk, best_summary, {
         "baseline": baseline_summary,
         "best": best_summary,
         "sweep": sweep,
@@ -1106,6 +1285,7 @@ def evaluate_policy_set(
     examples: list[Example],
     scores: dict[tuple[int, int], float],
     threshold: float,
+    gate_topk: int,
     baselines: dict,
 ) -> dict:
     by_window_examples: dict[int, list[Example]] = defaultdict(list)
@@ -1144,11 +1324,7 @@ def evaluate_policy_set(
             if trial_obj < greedy_obj:
                 greedy_obj = trial_obj
                 greedy_ids = trial_ids
-        trained_ids = {
-            ex.request_id
-            for ex in by_window_examples[window_id]
-            if scores[(ex.window_id, ex.request_id)] >= threshold
-        }
+        trained_ids = select_score_ids(by_window_examples[window_id], scores, threshold, gate_topk)
         for name, ids in [
             ("candidate_all", candidate_ids),
             ("oracle_utility", oracle_ids),
@@ -1192,7 +1368,7 @@ def print_eval(title: str, summary: dict, baseline_name: str = "baseline") -> No
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", choices=["mooncake_parquet", "burstgpt_csv"], default="mooncake_parquet")
+    parser.add_argument("--source", choices=["mooncake_parquet", "burstgpt_csv", "jsonl"], default="mooncake_parquet")
     parser.add_argument("--dataset", default="valeriol29/mooncake-traces")
     parser.add_argument("--config-name", default="mooncake")
     parser.add_argument("--split", default="train")
@@ -1203,6 +1379,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--burstgpt-max-rows", type=int, default=50000)
     parser.add_argument("--burstgpt-starts", type=int, nargs="*")
     parser.add_argument("--burstgpt-sequential", action="store_true")
+    parser.add_argument("--jsonl-path")
+    parser.add_argument("--jsonl-max-rows", type=int, default=0)
+    parser.add_argument("--jsonl-starts", type=int, nargs="*")
+    parser.add_argument("--jsonl-sequential", action="store_true")
+    parser.add_argument("--jsonl-request-id-field", default="request_id")
+    parser.add_argument("--jsonl-timestamp-field", default="timestamp")
+    parser.add_argument("--jsonl-delay-field", default="delay")
+    parser.add_argument("--jsonl-delay-divisor", type=float, default=1000.0)
+    parser.add_argument("--jsonl-input-field", default="input_length")
+    parser.add_argument("--jsonl-output-field", default="output_length")
+    parser.add_argument("--jsonl-hash-field", default="hash_ids")
+    parser.add_argument("--jsonl-session-field", default="session_id")
+    parser.add_argument("--jsonl-group-field", default="group_id")
+    parser.add_argument("--jsonl-message-field", default="messages")
     parser.add_argument("--windows", type=int, default=6)
     parser.add_argument("--train-windows", type=int, default=3)
     parser.add_argument("--rows-per-window", type=int, default=500)
@@ -1233,6 +1423,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.15)
     parser.add_argument("--l2", type=float, default=1e-4)
     parser.add_argument("--threshold-selection", choices=["class_f1", "replay"], default="replay")
+    parser.add_argument(
+        "--gate-topk-options",
+        type=int,
+        nargs="*",
+        default=[0],
+        help="Per-window trained-gate trigger caps to consider during replay threshold selection; 0 means no cap.",
+    )
     parser.add_argument("--progress-every", type=int, default=20)
     parser.add_argument("--out", default="experiments/btb_utility_gate_results.json")
     return parser.parse_args()
@@ -1242,6 +1439,8 @@ def main() -> None:
     args = parse_args()
     if args.train_windows <= 0 or args.train_windows >= args.windows:
         raise SystemExit("--train-windows must be between 1 and windows-1")
+    if args.source == "jsonl" and not args.jsonl_path:
+        raise SystemExit("--jsonl-path is required when --source jsonl")
     cfg = make_cfg(args)
     cfg.RDMA_ON_ADMIT = False
 
@@ -1274,9 +1473,10 @@ def main() -> None:
     }
     class_threshold, _ = choose_threshold(train, all_scores)
     threshold = class_threshold
+    gate_topk = 0
     replay_threshold_info = None
     if args.threshold_selection == "replay":
-        threshold, _, replay_threshold_info = choose_threshold_by_replay(
+        threshold, gate_topk, _, replay_threshold_info = choose_threshold_by_replay(
             args,
             cfg,
             windows[: args.train_windows],
@@ -1284,16 +1484,17 @@ def main() -> None:
             all_scores,
             baselines,
         )
-    test_class_metrics = binary_metrics(test, all_scores, threshold)
-    train_class_metrics = binary_metrics(train, all_scores, threshold)
-    print(f"chosen threshold={threshold:.3f}")
+    test_class_metrics = binary_metrics(test, all_scores, threshold, gate_topk)
+    train_class_metrics = binary_metrics(train, all_scores, threshold, gate_topk)
+    print(f"chosen threshold={threshold:.3f}, gate_topk={gate_topk or 'all'}")
     if args.threshold_selection == "replay":
         base = replay_threshold_info["baseline"]
         best = replay_threshold_info["best"]
         print(
             "threshold selected by train replay: "
             f"{args.objective_metric} {base[args.objective_metric]:.6f} -> "
-            f"{best[args.objective_metric]:.6f}, triggers={best['triggers']:.1f}",
+            f"{best[args.objective_metric]:.6f}, triggers={best['triggers']:.1f}, "
+            f"gate_topk={gate_topk or 'all'}",
             flush=True,
         )
     print(f"train gate metrics: {train_class_metrics}")
@@ -1301,8 +1502,8 @@ def main() -> None:
 
     train_windows = windows[: args.train_windows]
     test_windows = windows[args.train_windows :]
-    train_summary = evaluate_policy_set(args, cfg, train_windows, train, all_scores, threshold, baselines)
-    test_summary = evaluate_policy_set(args, cfg, test_windows, test, all_scores, threshold, baselines)
+    train_summary = evaluate_policy_set(args, cfg, train_windows, train, all_scores, threshold, gate_topk, baselines)
+    test_summary = evaluate_policy_set(args, cfg, test_windows, test, all_scores, threshold, gate_topk, baselines)
     print_eval("Train-window replay", train_summary)
     print_eval("Held-out replay", test_summary)
 
@@ -1317,6 +1518,7 @@ def main() -> None:
         "windows": [window.ident for window in windows],
         "class_metrics": {"train": train_class_metrics, "test": test_class_metrics},
         "threshold": threshold,
+        "gate_topk": gate_topk,
         "class_f1_threshold": class_threshold,
         "threshold_selection": args.threshold_selection,
         "replay_threshold_info": replay_threshold_info,
