@@ -26,7 +26,7 @@ improves the combined replay objective.
 
 | Source | Prefix signal | Status | Held-out result |
 | --- | --- | --- | --- |
-| ART-Chat-2.5M | Real `hash_ids` | Positive | trained gate: mean TTFT -8.5%, p95 TTFT -10.5% |
+| ART-Chat-2.5M | Real `hash_ids` | Split-sensitive positive | H30/K8 seed23: mean TTFT -8.5%, p95 TTFT -10.5%; robustness sweep is mixed |
 | Mooncake trace | Real `hash_ids` | Boundary/no-op | no utility-positive triggers in sampled windows |
 | Qwen Bailian To-C | Real `hash_ids` | Weak positive | random windows: trained gate mean TTFT -0.9%, p95 ~neutral |
 | Qwen Bailian To-B | Real `hash_ids` | Boundary/no-op | permissive key: trained gate no-ops on held-out |
@@ -123,8 +123,52 @@ Held-out replay:
 | greedy oracle | 36.281s | 71.602s | 3.0 | 5.369 |
 | trained gate | 39.551s | 77.522s | 13.3 | 2.908 |
 
-Takeaway: real non-synthetic win. Triggering every burst-like candidate is
-harmful, but the utility-trained gate improves both mean and p95 TTFT.
+Takeaway: real-hash workload win on this setting. Triggering every burst-like
+candidate is harmful, but the utility-trained gate improves both mean and p95
+TTFT.
+
+ART robustness sweep:
+
+```bash
+python3 experiments/btb_result_summary.py \
+  experiments/btb_utility_gate_art_h30_replay_threshold_greedy.json \
+  experiments/btb_utility_gate_art_h10_k8.json \
+  experiments/btb_utility_gate_art_h30_k4.json \
+  experiments/btb_utility_gate_art_h30_k8_seed37.json \
+  experiments/btb_utility_gate_art_h60_k8_r1600.json
+```
+
+| Variant | Seed | Rows/window | Horizon | Key/warm blocks | Trained dMean | Trained dP95 | Greedy dMean | Greedy dP95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| H30/K8 | 23 | 800 | 30s | 8/8 | -8.5% | -10.5% | -16.1% | -17.4% |
+| H10/K8 | 23 | 800 | 10s | 8/8 | +6.8% | +8.7% | -1.4% | +2.3% |
+| H30/K4 | 23 | 800 | 30s | 4/4 | -6.6% | -4.6% | -16.1% | -18.6% |
+| H30/K8 | 37 | 800 | 30s | 8/8 | +14.5% | +0.7% | -21.0% | +5.3% |
+| H60/K8 | 23 | 1600 | 60s | 8/8 | +2.1% | +4.4% | -1.7% | +7.8% |
+
+Robustness takeaway: ART is promising but not yet a general setting win. The
+positive result survives a smaller prefix key at the same 30s horizon, but it
+does not survive the 10s horizon, 60s horizon, or one alternate random split.
+The seed37 split is especially informative because greedy still finds mean
+headroom while the learned gate hurts held-out mean TTFT, which points to score
+calibration/distribution shift rather than absence of opportunity.
+
+A one-window validation threshold/top-k selection avoids the bad seed37 trigger
+choices, but only by selecting no-op. It also removes the good seed23 H30/K8
+speedup:
+
+| Variant | Seed | Threshold windows | Trained dMean | Trained dP95 | Triggers/window |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| H30/K8 | 23 | 1 | +0.0% | +0.0% | 0.0 |
+| H30/K8 | 37 | 1 | +0.0% | +0.0% | 0.0 |
+
+Using more ART windows for the bad seed37 split gives the classifier more
+trace coverage and recovers some tail benefit, but still not a mean TTFT win:
+
+| Variant | Seed | Windows | Train windows | Threshold windows | Trained dMean | Trained dP95 | Greedy dMean | Greedy dP95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| H30/K8 | 37 | 10 | 6 | 0 | +1.9% | -4.9% | -12.5% | -15.1% |
+| H30/K8 | 37 | 10 | 6 | 2 | +5.5% | -5.9% | -12.5% | -15.1% |
 
 ### Mooncake, Real Hashes
 
@@ -450,12 +494,16 @@ mean TTFT by 4.3%.
 
 ## Next Research Loop
 
-- Add tail-aware objective calibration and rerun p95-targeted Qwen sweeps.
+- Fix ART score calibration before claiming generality: the first
+  validation-window check avoids harm by selecting no-op, so the next version
+  needs confidence-aware trigger selection rather than a single replay
+  threshold.
+- Add tail-aware objective calibration and rerun p95-targeted ART/Qwen sweeps.
 - Tune warm-cost units against real serving measurements instead of treating
   `warm_gb_cost=1.0` as final.
 - Add regime features for distribution shift: per-window load, candidate score
   calibration, recent queueing, and candidate density.
 - Run K-fold/random-window evaluation over ART and Qwen before calling any new
-  Bailian result publishable.
+  result publishable.
 - Add a small real-hardware replay once an OpenAI-compatible prefix-cache server
   is available.

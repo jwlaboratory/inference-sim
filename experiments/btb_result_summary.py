@@ -40,16 +40,20 @@ def objective_label(payload: dict) -> str:
         value = float(cfg.get(name, args.get(name, 0.0)) or 0.0)
         if value:
             parts.append(f"{value:g}*{label}")
+    if int(args.get("threshold_windows", 0) or 0):
+        parts.append(f"valid{int(args['threshold_windows'])}")
+    feature_count = len(payload.get("model", {}).get("feature_names", []))
+    if feature_count:
+        parts.append(f"feat{feature_count}")
     return "+".join(parts)
 
 
 def label_for(path: Path, payload: dict) -> str:
     args = payload.get("args", {})
-    source = args.get("source") or args.get("dataset") or path.stem
     jsonl_path = args.get("jsonl_path")
     if jsonl_path:
-        source = Path(jsonl_path).stem
-    return source
+        return Path(jsonl_path).stem
+    return args.get("dataset") or args.get("source") or path.stem
 
 
 def row_for(path: Path) -> dict:
