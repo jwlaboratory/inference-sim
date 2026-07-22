@@ -170,6 +170,41 @@ trace coverage and recovers some tail benefit, but still not a mean TTFT win:
 | H30/K8 | 37 | 10 | 6 | 0 | +1.9% | -4.9% | -12.5% | -15.1% |
 | H30/K8 | 37 | 10 | 6 | 2 | +5.5% | -5.9% | -12.5% | -15.1% |
 
+ART model/hardware sweep:
+
+```bash
+python3 experiments/btb_art_model_hardware_sweep.py
+```
+
+This compact sweep uses 6 windows, 500 rows/window, a 30s horizon, 40
+candidates/window, and real ART `hash_ids`. It varies model scale, GPU type,
+GPU count, arrival speed, and MFU/MBU efficiency. The added presets include
+GLM-4.5-Air-like 106B/12B-active MoE, GLM-4.5-like 355B/32B-active MoE,
+Kimi-K2-like 1T/32B-active MoE, and a synthetic dense 1T fp8 stress case.
+Full artifacts and the TSV summary live under
+`experiments/art_model_hardware_sweep/`.
+
+Representative held-out results:
+
+| Setup | Model | Hardware | Trained dMean | Trained dP95 | Greedy dMean | Greedy dP95 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| 70b_h100x4_base | 70B dense fp16 | 4x4 H100 | -12.1% | -0.4% | -22.4% | -11.1% |
+| 70b_a100x4_base | 70B dense fp16 | 4x4 A100 | -4.3% | -1.1% | -14.7% | -18.6% |
+| 70b_h200x4_base | 70B dense fp16 | 4x4 H200 | +4.2% | +13.8% | -21.7% | -26.1% |
+| 70b_h100x4_fast_arrivals | 70B dense fp16 | 4x4 H100 | +4.1% | +1.7% | -8.9% | -22.2% |
+| 70b_h100x4_slow_topk | 70B dense fp16 | 4x4 H100 | +26.3% | -7.6% | -11.8% | -11.7% |
+| glm45_air_h100x4 | GLM-4.5-Air-like int4 MoE | 4x4 H100 | -2.8% | -1.0% | -7.0% | -6.0% |
+| kimi_k2_b200x4 | Kimi-K2-like int4 MoE | 4x4 B200 | -1.9% | -3.0% | -11.9% | -11.8% |
+| dense1t_b300x4_topk | synthetic dense 1T fp8 | 4x4 B300 | -13.9% | -18.9% | -19.4% | -16.4% |
+
+Model/hardware takeaway: BTB is most promising when prefill is expensive:
+slower A100-class hardware and the dense 1T stress case produce real wins. It
+is not automatically better on 1T+ sparse MoE models; Kimi-K2-like and GLM-like
+MoE presets have low active-parameter cost in this timing model, so absolute
+TTFT is tiny and the learned gate often misses held-out opportunities despite
+greedy oracle headroom. Top-k trigger caps help the dense 1T stress case and
+some p95-only cases, but they do not make the gate generally mean-speedup safe.
+
 ### Mooncake, Real Hashes
 
 Command:
@@ -495,9 +530,13 @@ mean TTFT by 4.3%.
 ## Next Research Loop
 
 - Fix ART score calibration before claiming generality: the first
-  validation-window check avoids harm by selecting no-op, so the next version
-  needs confidence-aware trigger selection rather than a single replay
-  threshold.
+  validation-window check avoids harm by selecting no-op, and the
+  model/hardware sweep shows top-k caps alone are insufficient outside
+  expensive-prefill regimes. The next version needs confidence-aware trigger
+  selection rather than a single replay threshold.
+- Prioritize dense/compute-bound and slower-hardware regimes for positive BTB
+  claims; treat sparse 1T+ MoE on fast hardware as a small-delta calibration
+  stress test, not the headline win.
 - Add tail-aware objective calibration and rerun p95-targeted ART/Qwen sweeps.
 - Tune warm-cost units against real serving measurements instead of treating
   `warm_gb_cost=1.0` as final.

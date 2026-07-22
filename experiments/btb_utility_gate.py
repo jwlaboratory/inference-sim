@@ -84,6 +84,81 @@ FEATURE_NAMES = [
     "warm_seconds_per_future_horizon_log",
 ]
 
+MODEL_PRESETS = {
+    "default": {
+        "PARAMS": 70.6e9,
+        "ACTIVE_PARAMS": 70.6e9,
+        "DTYPE_BYTES": 2.0,
+        "LAYERS": 80,
+        "KV_HEADS": 8,
+        "HEAD_DIM": 128,
+    },
+    "glm52-int4": {
+        "PARAMS": 744e9,
+        "ACTIVE_PARAMS": 40e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 78,
+        "KV_HEADS": 1,
+        "HEAD_DIM": 288,
+    },
+    "glm45-air-int4": {
+        "PARAMS": 106e9,
+        "ACTIVE_PARAMS": 12e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 46,
+        "KV_HEADS": 4,
+        "HEAD_DIM": 128,
+    },
+    "glm45-int4": {
+        "PARAMS": 355e9,
+        "ACTIVE_PARAMS": 32e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 92,
+        "KV_HEADS": 4,
+        "HEAD_DIM": 128,
+    },
+    "kimi-k2-int4": {
+        "PARAMS": 1e12,
+        "ACTIVE_PARAMS": 32e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 61,
+        "KV_HEADS": 8,
+        "HEAD_DIM": 128,
+    },
+    "kimi-code-1t-int4": {
+        "PARAMS": 1e12,
+        "ACTIVE_PARAMS": 32e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 61,
+        "KV_HEADS": 1,
+        "HEAD_DIM": 288,
+    },
+    "qwen3-8b": {
+        "PARAMS": 8.19e9,
+        "ACTIVE_PARAMS": 8.19e9,
+        "DTYPE_BYTES": 2.0,
+        "LAYERS": 36,
+        "KV_HEADS": 8,
+        "HEAD_DIM": 128,
+    },
+    "qwen3-8b-int4": {
+        "PARAMS": 8.19e9,
+        "ACTIVE_PARAMS": 8.19e9,
+        "DTYPE_BYTES": 0.5,
+        "LAYERS": 36,
+        "KV_HEADS": 8,
+        "HEAD_DIM": 128,
+    },
+    "dense1t-fp8": {
+        "PARAMS": 1e12,
+        "ACTIVE_PARAMS": 1e12,
+        "DTYPE_BYTES": 1.0,
+        "LAYERS": 120,
+        "KV_HEADS": 8,
+        "HEAD_DIM": 128,
+    },
+}
+
 
 @dataclass
 class Obs:
@@ -356,13 +431,12 @@ def make_cfg(args: argparse.Namespace) -> SimpleNamespace:
     cfg.MAX_BATCH = args.max_batch
     cfg.IMBALANCE_ABS = args.imbalance_abs
     cfg.IMBALANCE_REL = args.imbalance_rel
-    if args.model_preset == "glm52-int4":
-        cfg.PARAMS = 744e9
-        cfg.ACTIVE_PARAMS = 40e9
-        cfg.DTYPE_BYTES = 0.5
-        cfg.LAYERS = 78
-        cfg.KV_HEADS = 1
-        cfg.HEAD_DIM = 288
+    for name, value in MODEL_PRESETS[args.model_preset].items():
+        setattr(cfg, name, value)
+    if args.mfu > 0:
+        cfg.MFU = args.mfu
+    if args.mbu > 0:
+        cfg.MBU = args.mbu
     spec = getattr(config, args.gpu)
     spec = replace(spec, rdma_bw=args.rdma_gbps * config.GB)
     cfg.CLUSTER = [(f"node{i}", spec, args.gpus_per_replica) for i in range(args.num_replicas)]
@@ -1428,10 +1502,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rdma-gbps", type=float, default=0.0)
     parser.add_argument("--hbm-only", action="store_true", default=True)
     parser.add_argument("--max-batch", type=int, default=256)
-    parser.add_argument("--model-preset", choices=["default", "glm52-int4"], default="glm52-int4")
+    parser.add_argument("--model-preset", choices=sorted(MODEL_PRESETS), default="glm52-int4")
     parser.add_argument("--num-replicas", type=int, default=8)
     parser.add_argument("--gpus-per-replica", type=int, default=8)
-    parser.add_argument("--gpu", choices=["H100", "H200", "B200", "B300", "A100"], default="H100")
+    parser.add_argument("--gpu", choices=["H100", "H200", "B200", "B300", "A100", "MI300X", "MI355X"], default="H100")
+    parser.add_argument("--mfu", type=float, default=0.0, help="Override prefill model FLOP utilization; <=0 keeps config default.")
+    parser.add_argument("--mbu", type=float, default=0.0, help="Override decode memory bandwidth utilization; <=0 keeps config default.")
     parser.add_argument("--imbalance-abs", type=int, default=8)
     parser.add_argument("--imbalance-rel", type=float, default=1.5)
     parser.add_argument("--objective-metric", choices=["mean_ttft", "p95_ttft", "mean_lat", "p95_lat"], default="mean_ttft")
