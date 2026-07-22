@@ -1,0 +1,25 @@
+name: config-sync
+
+# Fail the build if ui/src/config.js defaults drift from config.py.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - config.py
+      - ui/src/config.js
+      - test_config_sync.py
+
+jobs:
+  config-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check UI defaults match config.py
+        run: python3 test_config_sync.py
