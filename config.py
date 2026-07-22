@@ -61,6 +61,16 @@ MI355X = GPUSpec("MI355X", 2500e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
 IMBALANCE_ABS = 8      # in-flight requests
 IMBALANCE_REL = 1.5    # max_load > REL * min_load
 
+# Cross-node prefix reuse rides a shared RDMA fabric with finite fan-in. With
+# this on, concurrent peer transfers contend during a burst: when many nodes
+# pull KV from the few holding a hot prefix at once, each transfer slows (modeled
+# mean-field in simulate.advance -- a peer load is stretched by up to the node
+# count when the puller is backlogged). This erodes the shared-cache advantage
+# exactly when a flash crowd hits. A single transfer on an idle fabric is
+# unchanged. Off = every transfer gets full bandwidth in isolation (the prior,
+# contention-free behavior).
+RDMA_CONGESTION = True
+
 # ---------------------------------------------------------------- simulate.py
 # cluster = list of nodes: (name, GPUSpec, gpu count). GPUs within a node
 # serve together (tensor parallel: compute/bandwidth/HBM aggregate); nodes

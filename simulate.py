@@ -92,7 +92,19 @@ def advance(node, until, nodes, disk, cfg, events):
             node.waiting.popleft()
             n, load, tier = prefix_source(req, node, nodes, disk, cfg)
             hit = min(n * cfg.BLOCK_TOKENS, req.prefix_tokens)
-            reuse = min(load, node.prefill_time(hit))   # recompute if loading is slower
+            recompute = node.prefill_time(hit)
+            if getattr(cfg, "RDMA_CONGESTION", False) and tier == "rdma" and load > 0:
+                # Mean-field RDMA fabric contention: a burst makes many nodes
+                # pull KV from the few holding a hot prefix at once, so peer
+                # transfers share the fabric's fan-in. Burst pressure is sensed
+                # locally from this node's own backlog and stretches the transfer
+                # by up to the node count (the fan-in bound); an idle-fabric
+                # transfer (backlog <= 1) is unchanged. When contention makes a
+                # local recompute cheaper, the request recomputes instead.
+                load *= min(len(nodes), max(1, len(node.waiting)))
+                if load >= recompute:
+                    tier = "miss"
+            reuse = min(load, recompute)   # recompute if loading is slower
             prefill = node.prefill_time(req.input_tokens - hit)
             node.running.append(Seq(req, node.now, reuse, prefill, hit, tier))
             node.now += reuse + prefill
