@@ -8,7 +8,7 @@ export const DEFAULT_CONFIG = {
     PARAMS: 70.6e9, ACTIVE_PARAMS: 70.6e9, DTYPE_BYTES: 2,
     LAYERS: 80, KV_HEADS: 8, HEAD_DIM: 128,
     MFU: 0.5, MBU: 0.8, MAX_BATCH: 256,
-    IMBALANCE_ABS: 8, IMBALANCE_REL: 1.5, DISK_CACHE: true,
+    IMBALANCE_ABS: 64, IMBALANCE_REL: 1.5, DISK_CACHE: true,
   },
   /* flops = peak dense BF16 (no sparsity), matching the H100 989 TF convention.
      ram_bw ≈ realistic PCIe gen for the part; rdma_bw ≈ per-GPU NIC (400G = 50 GB/s,
