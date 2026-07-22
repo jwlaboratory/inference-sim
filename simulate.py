@@ -33,8 +33,11 @@ def prefix_source(req, node, nodes, disk, cfg):
              "hbm" if ram_n == 0 else "ram")
     candidates = [local]
 
-    remote_n = max((sum(nd.match(req.blocks)) for nd in nodes if nd is not node), default=0)
-    candidates.append((remote_n, node.load_time(remote_n * node.block_bytes, "rdma"), "rdma"))
+    if getattr(cfg, "ADMIT_RDMA", True):
+        # opportunistic peer-to-peer KV pull (see config.ADMIT_RDMA). Off => a
+        # miss recomputes instead of stealing a peer's KV (real SGLang behavior).
+        remote_n = max((sum(nd.match(req.blocks)) for nd in nodes if nd is not node), default=0)
+        candidates.append((remote_n, node.load_time(remote_n * node.block_bytes, "rdma"), "rdma"))
 
     if cfg.DISK_CACHE:
         disk_n = 0

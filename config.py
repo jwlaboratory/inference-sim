@@ -57,9 +57,10 @@ MI355X = GPUSpec("MI355X", 2500e12, 8.00e12, 288 * GB, 120e9, 100e9, 7e9)
 # ------------------------------------------------------------------ router.py
 # cache-aware falls back to least-load when both thresholds are exceeded.
 # Load = requests in flight on a node (decode batch + waiting queue), as in
-# the SGLang gateway; keep ABS around a typical batch's worth of requests.
-IMBALANCE_ABS = 8      # in-flight requests
-IMBALANCE_REL = 1.5    # max_load > REL * min_load
+# the SGLang gateway. Defaults match the SGLang router:
+# --balance-abs-threshold 64, --balance-rel-threshold 1.5.
+IMBALANCE_ABS = 64     # in-flight requests (SGLang --balance-abs-threshold)
+IMBALANCE_REL = 1.5    # max_load > REL * min_load (SGLang --balance-rel-threshold)
 
 # Cross-node prefix reuse rides a shared RDMA fabric with finite fan-in. With
 # this on, concurrent peer transfers contend during a burst: when many nodes
@@ -70,6 +71,15 @@ IMBALANCE_REL = 1.5    # max_load > REL * min_load
 # unchanged. Off = every transfer gets full bandwidth in isolation (the prior,
 # contention-free behavior).
 RDMA_CONGESTION = True
+
+# Opportunistic peer-to-peer KV reuse. When True, a node that misses a prefix
+# locally may pull it from any peer that holds it over RDMA (a "cache steal").
+# Real SGLang does NOT do this on the least-load/cache-aware path: a miss just
+# recomputes the prefix; cross-worker KV movement is instead a structured PD
+# handoff (Mooncake/NIXL) or a shared pool (HiCache). Set False to model that
+# realistic recompute-on-miss behavior. This gates only the *baseline* reuse
+# path -- BTB's structured warming push always transfers at full RDMA bandwidth.
+ADMIT_RDMA = True
 
 # ---------------------------------------------------------------- simulate.py
 # cluster = list of nodes: (name, GPUSpec, gpu count). GPUs within a node
